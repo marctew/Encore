@@ -1,0 +1,2 @@
+aiohttp==3.14.5
+mutagen==1.48.1

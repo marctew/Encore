@@ -1,0 +1,134 @@
+"""Everything Encore keeps between runs, so MusicBrainz is only asked once per artist or album.
+
+Nothing here expires by itself: a Refresh button on the page is what fetches newer data.
+"""
+import json
+import sqlite3
+import time
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS artists (id TEXT PRIMARY KEY, name TEXT, info TEXT, photo TEXT DEFAULT '',
+    photo_at REAL DEFAULT 0, albums_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS albums (id TEXT PRIMARY KEY, artist_id TEXT, data TEXT);
+CREATE INDEX IF NOT EXISTS albums_by_artist ON albums (artist_id);
+CREATE TABLE IF NOT EXISTS details (id TEXT PRIMARY KEY, data TEXT, saved_at REAL);
+CREATE TABLE IF NOT EXISTS searches (kind TEXT, query TEXT, ids TEXT, saved_at REAL, PRIMARY KEY (kind, query));
+CREATE TABLE IF NOT EXISTS plex_artists (rating TEXT PRIMARY KEY, name TEXT, mbid TEXT, thumb TEXT);
+CREATE TABLE IF NOT EXISTS plex_albums (rating TEXT PRIMARY KEY, artist_rating TEXT, artist TEXT, title TEXT,
+    year INTEGER, thumb TEXT);
+CREATE TABLE IF NOT EXISTS wanted (album_id TEXT PRIMARY KEY, artist_id TEXT, data TEXT, added REAL,
+    searched_at REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS facts (name TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+class Store:
+    def __init__(self, path):
+        self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(SCHEMA)
+
+    def rows(self, sql, *values):
+        return self.db.execute(sql, values).fetchall()
+
+    def one(self, sql, *values):
+        return self.db.execute(sql, values).fetchone()
+
+    def save_artist(self, info):
+        self.db.execute("INSERT INTO artists (id, name, info) VALUES (?, ?, ?) "
+                        "ON CONFLICT (id) DO UPDATE SET name = excluded.name, info = excluded.info",
+                        (info["id"], info["name"], json.dumps(info)))
+
+    def artist(self, artist_id):
+        row = self.one("SELECT * FROM artists WHERE id = ?", artist_id)
+        return {**json.loads(row["info"]), "photo": row["photo"], "photo_at": row["photo_at"],
+                "albums_at": row["albums_at"]} if row else None
+
+    def set_photo(self, artist_id, value):
+        self.db.execute("UPDATE artists SET photo = ?, photo_at = ? WHERE id = ?", (value, time.time(), artist_id))
+
+    def clear_photo(self, artist_id):
+        self.db.execute("UPDATE artists SET photo = '', photo_at = 0 WHERE id = ?", (artist_id,))
+
+    def save_album(self, album):
+        self.db.execute("INSERT OR REPLACE INTO albums (id, artist_id, data) VALUES (?, ?, ?)",
+                        (album["id"], album.get("artist_id") or "", json.dumps(album)))
+
+    def save_albums(self, artist_id, albums):
+        self.db.execute("BEGIN")
+        self.db.execute("DELETE FROM albums WHERE artist_id = ?", (artist_id,))
+        for album in albums:
+            self.save_album(album)
+        self.db.execute("UPDATE artists SET albums_at = ? WHERE id = ?", (time.time(), artist_id))
+        self.db.execute("COMMIT")
+
+    def album(self, album_id):
+        row = self.one("SELECT data FROM albums WHERE id = ?", album_id)
+        return json.loads(row["data"]) if row else None
+
+    def albums_of(self, artist_id):
+        return [json.loads(r["data"]) for r in self.rows("SELECT data FROM albums WHERE artist_id = ?", artist_id)]
+
+    def save_details(self, album_id, details):
+        self.db.execute("INSERT OR REPLACE INTO details (id, data, saved_at) VALUES (?, ?, ?)",
+                        (album_id, json.dumps(details), time.time()))
+
+    def details(self, album_id):
+        row = self.one("SELECT data, saved_at FROM details WHERE id = ?", album_id)
+        return {**json.loads(row["data"]), "saved_at": row["saved_at"]} if row else None
+
+    def has_details(self, album_id):
+        return bool(self.one("SELECT 1 FROM details WHERE id = ?", album_id))
+
+    def save_search(self, kind, query, ids):
+        self.db.execute("INSERT OR REPLACE INTO searches (kind, query, ids, saved_at) VALUES (?, ?, ?, ?)",
+                        (kind, query, json.dumps(ids), time.time()))
+
+    def search(self, kind, query):
+        row = self.one("SELECT ids, saved_at FROM searches WHERE kind = ? AND query = ?", kind, query)
+        return (json.loads(row["ids"]), row["saved_at"]) if row else (None, 0)
+
+    def replace_plex(self, artists, albums):
+        self.db.execute("BEGIN")
+        self.db.execute("DELETE FROM plex_artists")
+        self.db.execute("DELETE FROM plex_albums")
+        self.db.executemany("INSERT INTO plex_artists VALUES (:rating, :name, :mbid, :thumb)", artists)
+        self.db.executemany("INSERT INTO plex_albums VALUES (:rating, :artist_rating, :artist, :title, :year, :thumb)", albums)
+        self.db.execute("INSERT OR REPLACE INTO facts VALUES ('plex_at', ?)", (str(time.time()),))
+        self.db.execute("COMMIT")
+
+    def plex_at(self):
+        row = self.one("SELECT value FROM facts WHERE name = 'plex_at'")
+        return float(row["value"]) if row else 0
+
+    def plex_artists(self):
+        return [dict(r) for r in self.rows(
+            "SELECT a.rating, a.name, a.mbid, a.thumb, COUNT(b.rating) AS albums FROM plex_artists a "
+            "LEFT JOIN plex_albums b ON b.artist_rating = a.rating GROUP BY a.rating ORDER BY a.name COLLATE NOCASE")]
+
+    def plex_albums(self):
+        return [dict(r) for r in self.rows("SELECT a.*, p.mbid FROM plex_albums a "
+                                           "LEFT JOIN plex_artists p ON p.rating = a.artist_rating")]
+
+    def plex_artist(self, mbid):
+        row = self.one("SELECT * FROM plex_artists WHERE mbid = ?", mbid)
+        return dict(row) if row else None
+
+    def plex_thumb(self, rating):
+        row = self.one("SELECT thumb FROM plex_artists WHERE rating = ? "
+                       "UNION SELECT thumb FROM plex_albums WHERE rating = ?", rating, rating)
+        return row["thumb"] if row else None
+
+    def want(self, album):
+        self.db.execute("INSERT OR IGNORE INTO wanted (album_id, artist_id, data, added) VALUES (?, ?, ?, ?)",
+                        (album["id"], album.get("artist_id") or "", json.dumps(album), time.time()))
+
+    def unwant(self, album_id):
+        self.db.execute("DELETE FROM wanted WHERE album_id = ?", (album_id,))
+
+    def wanted(self):
+        return [{**json.loads(r["data"]), "added": r["added"], "searched_at": r["searched_at"]}
+                for r in self.rows("SELECT * FROM wanted ORDER BY added DESC")]
+
+    def wanted_ids(self):
+        return {r["album_id"] for r in self.rows("SELECT album_id FROM wanted")}
