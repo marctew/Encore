@@ -51,6 +51,8 @@ Press **Save and test** to check everything connects.
 
 Encore is open to anyone on your network until you set a password in **Settings**. It runs on plain HTTP, so put it behind HTTPS before exposing it to the internet.
 
+Behind a tunnel or proxy, set `ENCORE_TRUSTED_PROXY` to the proxy's IP address in the service file, so wrong-password locks apply per visitor and the sign-in cookie is HTTPS-only.
+
 If you forget the password, delete `data/auth.json` in the install folder and restart Encore:
 
 ```bash

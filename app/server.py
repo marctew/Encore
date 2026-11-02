@@ -47,6 +47,7 @@ PHOTO_RETRY = 30 * 86400
 ARTIST_LIMIT = 12
 COOKIE = "encore_session"
 OPEN_PATHS = ("/login", "/api/login")
+TRUSTED_PROXY = os.environ.get("ENCORE_TRUSTED_PROXY", "")
 LOST_AFTER = 40
 ACTIVE = ("queued", "downloading", "verifying", "filing", "scanning")
 ALBUM_ID = re.compile(r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
@@ -915,8 +916,21 @@ async def get_settings(request):
     return web.json_response({**request.app[settings_key].public(), "password": request.app[auth_key].enabled})
 
 
+def visitor(request):
+    """Behind a tunnel everyone arrives from the proxy, so wrong-password locks use the address
+    it reports. Only the configured proxy is believed, because anyone can send that header."""
+    if TRUSTED_PROXY and request.remote == TRUSTED_PROXY:
+        return request.headers.get("CF-Connecting-IP") or request.remote
+    return request.remote
+
+
+def over_https(request):
+    return bool(TRUSTED_PROXY) and request.remote == TRUSTED_PROXY and request.headers.get("X-Forwarded-Proto") == "https"
+
+
 def remember(response, request):
-    response.set_cookie(COOKIE, request.app[auth_key].token(), max_age=SESSION_DAYS * 86400, httponly=True, samesite="Lax")
+    response.set_cookie(COOKIE, request.app[auth_key].token(), max_age=SESSION_DAYS * 86400, httponly=True,
+                        samesite="Lax", secure=over_https(request))
 
 
 async def check_password(auth, password):
@@ -932,7 +946,7 @@ async def login_page(request):
 
 async def log_in(request):
     auth = request.app[auth_key]
-    address = request.remote
+    address = visitor(request)
     if auth.locked(address):
         return web.json_response({"error": "Too many tries. Wait a minute and try again."}, status=429)
     body = await request.json()
@@ -954,7 +968,7 @@ async def log_out(request):
 async def set_password(request):
     """Blank new turns the password off. Changing it needs the current one, even when signed in."""
     auth = request.app[auth_key]
-    address = request.remote
+    address = visitor(request)
     if auth.locked(address):
         return web.json_response({"error": "Too many tries. Wait a minute and try again."}, status=429)
     body = await request.json()
@@ -1119,6 +1133,12 @@ async def guard(request, handler):
         return web.json_response({"error": str(error)}, status=502)
 
 
+async def harden(request, response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+
+
 async def startup(app):
     app[owned_key].load(app[store_key])
     app["fill"] = asyncio.Event()
@@ -1158,6 +1178,7 @@ def make_app():
 
     app[queue_key] = Queue(app[indexers_key], app[sab_key], app[brainz_key], app[library_key], app[plex_key],
                            app[store_key], filed)
+    app.on_response_prepare.append(harden)
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)
     app.router.add_get("/", index)

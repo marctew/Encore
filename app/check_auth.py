@@ -108,6 +108,26 @@ async def main():
     next_up = next(j for j in queue.jobs if j["state"] == "queued")
     expect("worker takes the new first", next_up["id"] == "b")
 
+    server.TRUSTED_PROXY = "127.0.0.1"
+    outside = {**HEAD, "CF-Connecting-IP": "203.0.113.9", "X-Forwarded-Proto": "https"}
+    for _ in range(5):
+        await post(client, "/api/login", {"password": "guess"}, outside)
+    status, _ = await post(client, "/api/login", {"password": "another pass"}, outside)
+    expect("attacker behind the tunnel is locked", status == 429)
+    status, _ = await post(client, "/api/login", {"password": "another pass"}, {**outside, "CF-Connecting-IP": "203.0.113.10"})
+    expect("someone else can still sign in", status == 200)
+    response = await client.post("/api/login", json={"password": "another pass"}, headers={**outside, "CF-Connecting-IP": "203.0.113.11"})
+    expect("cookie is HTTPS-only through the tunnel", "Secure" in response.headers["Set-Cookie"])
+    expect("page can't be framed", response.headers["X-Frame-Options"] == "DENY")
+    server.TRUSTED_PROXY = ""
+    auth.fails.clear()
+    for _ in range(5):
+        await post(client, "/api/login", {"password": "guess"}, {**HEAD, "CF-Connecting-IP": "203.0.113.12"})
+    status, _ = await post(client, "/api/login", {"password": "another pass"}, {**HEAD, "CF-Connecting-IP": "203.0.113.13"})
+    expect("header ignored without a trusted proxy", status == 429)
+    auth.fails.clear()
+    await post(client, "/api/login", {"password": "another pass"})
+
     status, _ = await post(client, "/api/password", {"current": "wrong", "new": ""})
     expect("removing needs current password", status == 403 and auth.enabled)
     status, _ = await post(client, "/api/password", {"current": "another pass", "new": ""})
