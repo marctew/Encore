@@ -636,7 +636,7 @@ async function refreshHealth() {
     const s = await api('/api/status');
     setWantedCount(s.wanted);
     box.replaceChildren(
-      s.folders ? null : el('span', { class: 'down' }, el('i', { class: 'dot' }), 'Folders not set'),
+      ...(s.folders ? [] : [el('span', { class: 'down' }, el('i', { class: 'dot' }), 'Folders not set')]),
       s.indexers ? el('span', { class: 'ok' }, el('i', { class: 'dot' }), plural(s.indexers, 'indexer'))
         : el('span', { class: 'down' }, el('i', { class: 'dot' }), 'No indexers set up'),
       s.sab === 'ok' ? el('span', { class: 'ok' }, el('i', { class: 'dot' }), 'SABnzbd connected')
