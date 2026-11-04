@@ -3,4 +3,3 @@ archive/
 venv/
 __pycache__/
 *.pyc
-app/static/index.new.html

@@ -1,0 +1,22 @@
+# The unit install.sh writes, for reference: /etc/systemd/system/encore.service.
+# @DIR@, @USER@ and @PORT@ are filled in by install.sh.
+[Unit]
+Description=Encore
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PYTHONUNBUFFERED=1
+Environment=ENCORE_PORT=@PORT@
+Environment=ENCORE_DATA=/var/lib/encore
+# Behind a tunnel or proxy, its address, so wrong-password locks apply per visitor:
+# Environment=ENCORE_TRUSTED_PROXY=192.0.2.10
+# One worker: the queue and the search results the page picks from live in memory.
+ExecStart=@DIR@/venv/bin/gunicorn --workers 1 --threads 16 --bind 0.0.0.0:@PORT@ --timeout 120 --graceful-timeout 20 wsgi:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

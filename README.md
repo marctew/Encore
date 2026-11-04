@@ -53,7 +53,7 @@ Encore is open to anyone on your network until you set a password in **Settings*
 
 Behind a tunnel or proxy, set `ENCORE_TRUSTED_PROXY` to the proxy's IP address in the service file, so wrong-password locks apply per visitor and the sign-in cookie is HTTPS-only.
 
-If you forget the password, delete `data/auth.json` in the install folder and restart Encore:
+If you forget the password, delete `/var/lib/encore/auth.json` and restart Encore:
 
 ```bash
 systemctl restart encore
@@ -64,8 +64,14 @@ systemctl restart encore
 These run against fakes and throwaway folders, so they touch nothing real:
 
 ```bash
-cd /opt/encore/app && ../venv/bin/python check_usenet.py && ../venv/bin/python check_auth.py
+cd /opt/encore && venv/bin/python tools/check_usenet.py && venv/bin/python tools/check_auth.py
 ```
+
+## Updating and running
+
+`sudo /opt/encore/scripts/update.sh --pull` pulls, installs anything new, checks the code compiles and restarts, waiting if an album is being checked or filed. Running `install.sh` again does the same.
+
+Encore is a Flask app served by gunicorn (`wsgi.py`, one worker), as the `encore` systemd service. Its data (settings, the queue, the database, photos) is in `/var/lib/encore`; set `ENCORE_DATA` to move it. `/healthz` answers without a sign-in, for uptime monitors. For development, `python -m encore` runs it on its own.
 
 ## Note
 

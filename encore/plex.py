@@ -3,18 +3,18 @@
 Never run the CLI Plex Media Scanner: it deleted tracks during the library tidy.
 Errors are logged by type only, and the token only ever travels in a header.
 """
-import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-import aiohttp
+import requests
 
 WAIT_SECONDS = 300
-TIMEOUT = aiohttp.ClientTimeout(total=20)
+TIMEOUT = 20
 
 log = logging.getLogger("encore")
 
@@ -49,31 +49,29 @@ class Plex:
             headers["X-Plex-Token"] = self.state["token"]
         return headers
 
-    async def request(self, method, url):
-        async with aiohttp.ClientSession(timeout=TIMEOUT, headers=self.headers()) as session:
-            async with session.request(method, url) as response:
-                response.raise_for_status()
-                text = await response.text()
-                return json.loads(text) if text.strip() else {}
+    def request(self, method, url):
+        response = requests.request(method, url, headers=self.headers(), timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json() if response.text.strip() else {}
 
-    async def start_link(self):
-        pin = await self.request("POST", "https://plex.tv/api/v2/pins?strong=true")
+    def start_link(self):
+        pin = self.request("POST", "https://plex.tv/api/v2/pins?strong=true")
         params = urlencode({"clientID": self.state["client_id"], "code": pin["code"],
                             "context[device][product]": "Encore"})
         return {"id": pin["id"], "url": f"https://app.plex.tv/auth#?{params}"}
 
-    async def check_link(self, pin_id):
-        pin = await self.request("GET", f"https://plex.tv/api/v2/pins/{pin_id}")
+    def check_link(self, pin_id):
+        pin = self.request("GET", f"https://plex.tv/api/v2/pins/{pin_id}")
         if not pin.get("authToken"):
             return False
         self.state["token"] = pin["authToken"]
         self.save()
         return True
 
-    async def section(self):
+    def section(self):
         """Plex and Encore can mount the share under different paths, so the library is
         matched on the music folder's name, falling back to the first music library."""
-        data = await self.request("GET", f"{self.server}/library/sections")
+        data = self.request("GET", f"{self.server}/library/sections")
         name = Path(self.settings.data["folders"]["music"]).name
         found = [(section, location["path"].rstrip("/")) for section in data["MediaContainer"].get("Directory", [])
                  if section.get("type") == "artist" for location in section.get("Location", [])]
@@ -82,30 +80,30 @@ class Plex:
         section, path = next((pair for pair in found if Path(pair[1]).name == name), found[0])
         return section["key"], path, section.get("refreshing", False)
 
-    async def status(self):
+    def status(self):
         if not self.server:
             return "unset"
         if not self.linked:
             return "none"
         try:
-            await self.section()
+            self.section()
             return "ok"
         except Exception as error:
             log.warning("Plex status failed: %s", type(error).__name__)
             return "error"
 
-    async def scan(self, relative):
-        key, root, _ = await self.section()
+    def scan(self, relative):
+        key, root, _ = self.section()
         path = quote(f"{root}/{relative}", safe="")
-        await self.request("GET", f"{self.server}/library/sections/{key}/refresh?path={path}")
+        self.request("GET", f"{self.server}/library/sections/{key}/refresh?path={path}")
 
-    async def library(self):
+    def library(self):
         """Every artist and album Plex holds. Plex's type 8 is artists and 9 is albums."""
-        key = (await self.section())[0]
+        key = self.section()[0]
         data = {}
         for kind in (8, 9):
             url = f"{self.server}/library/sections/{key}/all?type={kind}&includeGuids=1"
-            data[kind] = (await self.request("GET", url))["MediaContainer"].get("Metadata", [])
+            data[kind] = self.request("GET", url)["MediaContainer"].get("Metadata", [])
         mbid = lambda item: next((g["id"][7:] for g in item.get("Guid", []) if g["id"].startswith("mbid://")), "")
         artists = [{"rating": a["ratingKey"], "name": a.get("title") or "", "mbid": mbid(a), "thumb": a.get("thumb") or ""}
                    for a in data[8]]
@@ -113,35 +111,34 @@ class Plex:
                    "title": a.get("title") or "", "year": a.get("year"), "thumb": a.get("thumb") or ""} for a in data[9]]
         return artists, albums
 
-    async def video_shown(self, rating, name):
+    def video_shown(self, rating, name):
         """Asks Plex to re-read the artist, then waits for the video among its extras."""
-        await self.request("PUT", f"{self.server}/library/metadata/{rating}/refresh")
+        self.request("PUT", f"{self.server}/library/metadata/{rating}/refresh")
         for _ in range(WAIT_SECONDS // 5):
-            await asyncio.sleep(5)
-            data = await self.request("GET", f"{self.server}/library/metadata/{rating}?includeExtras=1")
+            time.sleep(5)
+            data = self.request("GET", f"{self.server}/library/metadata/{rating}?includeExtras=1")
             items = data["MediaContainer"].get("Metadata", [{}])[0].get("Extras", {}).get("Metadata", [])
             if any(name in part.get("file", "") for item in items for media in item.get("Media", [])
                    for part in media.get("Part", [])):
                 return True
         return False
 
-    async def image(self, path):
+    def image(self, path):
         """A square-ish thumbnail, resized by Plex. The token stays on this side."""
         url = f"{self.server}/photo/:/transcode?width=400&height=400&minSize=1&upscale=0&url={quote(path, safe='')}"
-        async with aiohttp.ClientSession(timeout=TIMEOUT, headers=self.headers()) as session:
-            async with session.get(url) as response:
-                response.raise_for_status()
-                return await response.read(), response.content_type
+        response = requests.get(url, headers=self.headers(), timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.content, response.headers.get("Content-Type", "image/jpeg").split(";")[0]
 
-    async def found(self, artist, folder, tracks):
+    def found(self, artist, folder, tracks):
         """Counts tracks by file path across the library, because Plex's online match can
         change an album's title or put it under another artist."""
-        key, root, refreshing = await self.section()
+        key, root, refreshing = self.section()
         prefix = f"{root}/{folder}/"
         count = start = 0
         while True:
             url = f"{self.server}/library/sections/{key}/all?type=10&X-Plex-Container-Start={start}&X-Plex-Container-Size=2000"
-            items = (await self.request("GET", url))["MediaContainer"].get("Metadata", [])
+            items = self.request("GET", url)["MediaContainer"].get("Metadata", [])
             if not items:
                 return count >= tracks and not refreshing
             start += len(items)
@@ -149,12 +146,12 @@ class Plex:
                 count += any(part["file"].startswith(prefix) for media in item.get("Media", [])
                              for part in media.get("Part", []))
 
-    async def confirm(self, artist, folder, tracks):
+    def confirm(self, artist, folder, tracks):
         """Needs two clean reads in a row, because tracks can still arrive while Plex matches."""
         seen = 0
         for _ in range(WAIT_SECONDS // 5):
-            await asyncio.sleep(5)
-            seen = seen + 1 if await self.found(artist, folder, tracks) else 0
+            time.sleep(5)
+            seen = seen + 1 if self.found(artist, folder, tracks) else 0
             if seen == 2:
                 return True
         return False

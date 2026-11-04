@@ -38,31 +38,21 @@ python3 -m venv "$DIR/venv"
 "$DIR/venv/bin/pip" install --quiet --upgrade pip
 "$DIR/venv/bin/pip" install --quiet -r "$DIR/requirements.txt"
 
-mkdir -p "$DIR/data/photos"
-chown -R "$RUN_AS": "$DIR"
-chmod 700 "$DIR/data"
+DATA=/var/lib/encore
+if [ -d "$DIR/data" ] && [ ! -e "$DATA" ]; then
+    echo "Moving Encore's data from $DIR/data to $DATA..."
+    systemctl stop encore 2>/dev/null || true
+    mv "$DIR/data" "$DATA"
+fi
+mkdir -p "$DATA/photos"
+chown -R "$RUN_AS": "$DIR" "$DATA"
+chmod 700 "$DATA"
 
 url="http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT"
 
 if [ -d /run/systemd/system ]; then
-    cat > /etc/systemd/system/encore.service <<EOF
-[Unit]
-Description=Encore
-After=network-online.target remote-fs.target
-Wants=network-online.target
-
-[Service]
-User=$RUN_AS
-WorkingDirectory=$DIR/app
-Environment=PYTHONUNBUFFERED=1
-Environment=ENCORE_PORT=$PORT
-ExecStart=$DIR/venv/bin/python $DIR/app/server.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    sed -e "s|@DIR@|$DIR|g" -e "s|@USER@|$RUN_AS|g" -e "s|@PORT@|$PORT|g" "$DIR/deploy/encore.service" \
+        | grep -v 'install.sh writes\|filled in by install.sh' > /etc/systemd/system/encore.service
     systemctl daemon-reload
     systemctl enable --quiet encore
     systemctl restart encore
@@ -72,5 +62,5 @@ EOF
 else
     echo
     echo "Encore is installed, but this system has no systemd, so nothing was started."
-    echo "Start it with: cd $DIR/app && ENCORE_PORT=$PORT $DIR/venv/bin/python server.py"
+    echo "Start it with: cd $DIR && ENCORE_PORT=$PORT $DIR/venv/bin/python -m encore"
 fi

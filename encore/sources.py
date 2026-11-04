@@ -1,26 +1,27 @@
-"""The outside services Encore talks to: MusicBrainz, Newznab indexers and SABnzbd.
+"""The outside services Encore talks to: MusicBrainz, Newznab indexers, SABnzbd and Deezer.
 
-Exception text from aiohttp holds the full URL, which holds the API key, so only exception
+Exception text from requests holds the full URL, which holds the API key, so only exception
 types are logged, and nothing built from a URL ever reaches the page.
 """
-import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
-import aiohttp
+import requests
 
-from match import APOSTROPHES, words
+from .match import APOSTROPHES, words
 
 log = logging.getLogger("encore")
 AGENT = "Encore/2.0 (self-hosted music library tool)"
-BROWSER_TIMEOUT = aiohttp.ClientTimeout(total=40)
+TIMEOUT = 40
 MB = "https://musicbrainz.org/ws/2/"
 CATEGORY = "encore"
 CACHE_AGE = 600
@@ -85,19 +86,25 @@ class Settings:
 
 
 class Web:
-    """One shared session, opened late because it must belong to the running loop."""
+    """One requests session per thread: sessions keep connections open, but aren't safe to share."""
 
     def __init__(self):
-        self.client = None
+        self.local = threading.local()
 
     def session(self):
-        if not self.client or self.client.closed:
-            self.client = aiohttp.ClientSession(headers={"User-Agent": AGENT}, timeout=BROWSER_TIMEOUT)
-        return self.client
+        if not hasattr(self.local, "session"):
+            self.local.session = requests.Session()
+            self.local.session.headers["User-Agent"] = AGENT
+        return self.local.session
 
-    async def close(self):
-        if self.client:
-            await self.client.close()
+    def get(self, url, **kwargs):
+        return self.session().get(url, timeout=TIMEOUT, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.session().post(url, timeout=TIMEOUT, **kwargs)
+
+    def close(self):
+        pass
 
 
 def credit(names):
@@ -118,40 +125,43 @@ class MusicBrainz:
     def __init__(self, web, store):
         self.web = web
         self.store = store
-        self.lock = asyncio.Lock()
+        self.lock = threading.Lock()
+        self.count = threading.Lock()
         self.last = 0
         self.busy = 0
 
-    async def get(self, path, background=False, **params):
+    def get(self, path, background=False, **params):
         """busy counts what the page is waiting on, so background filling steps aside for it.
         MusicBrainz often answers 503 "busy" well under its rate limit, so a page request keeps
         trying for about a minute, and the lock is free meanwhile."""
         params["fmt"] = "json"
-        self.busy += not background
+        with self.count:
+            self.busy += not background
         try:
             for pause in (*(BACKGROUND_PAUSES if background else PAGE_PAUSES), None):
-                async with self.lock:
-                    await asyncio.sleep(max(0, self.last + 1.1 - time.time()))
+                with self.lock:
+                    time.sleep(max(0, self.last + 1.1 - time.time()))
                     self.last = time.time()
                     try:
-                        async with self.web.session().get(MB + path, params=params) as response:
-                            if response.status == 404:
-                                raise SourceError("MusicBrainz doesn't know that")
-                            if response.status in BUSY:
-                                log.info("MusicBrainz said %s", response.status)
-                            else:
-                                response.raise_for_status()
-                                return await response.json()
-                    except aiohttp.ClientError as error:
-                        log.warning("MusicBrainz call failed: %s", type(error).__name__)
-                    except asyncio.TimeoutError:
+                        response = self.web.get(MB + path, params=params)
+                        if response.status_code == 404:
+                            raise SourceError("MusicBrainz doesn't know that")
+                        if response.status_code in BUSY:
+                            log.info("MusicBrainz said %s", response.status_code)
+                        else:
+                            response.raise_for_status()
+                            return response.json()
+                    except requests.Timeout:
                         log.warning("MusicBrainz timed out")
+                    except (requests.RequestException, ValueError) as error:
+                        log.warning("MusicBrainz call failed: %s", type(error).__name__)
                 if pause is None:
                     break
-                await asyncio.sleep(pause)
+                time.sleep(pause)
             raise SourceError("MusicBrainz stayed busy for a minute. Try again shortly.")
         finally:
-            self.busy -= not background
+            with self.count:
+                self.busy -= not background
 
     @staticmethod
     def summary(group):
@@ -162,10 +172,10 @@ class MusicBrainz:
                 "artist": credit(group.get("artist-credit")) or "Unknown artist", "artist_id": lead, "year": date[:4],
                 "kind": " ".join([*extras, group.get("primary-type") or "Album"]), "cover": cover(group["id"])}
 
-    async def search(self, text):
+    def search(self, text):
         terms = [lucene(word) for word in text.split()]
         query = " AND ".join(f"(releasegroup:{t} OR artist:{t})" for t in terms)
-        data = await self.get("release-group", query=f"({query}) AND (primarytype:album OR primarytype:ep)", limit=60)
+        data = self.get("release-group", query=f"({query}) AND (primarytype:album OR primarytype:ep)", limit=60)
         return [self.summary(g) for g in data.get("release-groups") or []]
 
     @staticmethod
@@ -177,18 +187,18 @@ class MusicBrainz:
                 "begin": (span.get("begin") or "")[:4], "end": (span.get("end") or "")[:4], "ended": bool(span.get("ended")),
                 "note": artist.get("disambiguation") or "", "tags": [t["name"] for t in tags[:4]]}
 
-    async def artists(self, text):
-        data = await self.get("artist", query=f'artist:"{lucene(text)}"', limit=30)
+    def artists(self, text):
+        data = self.get("artist", query=f'artist:"{lucene(text)}"', limit=30)
         return [self.artist_info(a) for a in data.get("artists") or []]
 
-    async def artist(self, artist_id):
-        return self.artist_info(await self.get(f"artist/{artist_id}", inc="tags"))
+    def artist(self, artist_id):
+        return self.artist_info(self.get(f"artist/{artist_id}", inc="tags"))
 
-    async def artist_albums(self, artist_id):
+    def artist_albums(self, artist_id):
         groups = []
         while True:
-            data = await self.get("release-group", artist=artist_id, type="album|ep", limit=100, offset=len(groups),
-                                  inc="artist-credits", **{"release-group-status": "website-default"})
+            data = self.get("release-group", artist=artist_id, type="album|ep", limit=100, offset=len(groups),
+                            inc="artist-credits", **{"release-group-status": "website-default"})
             found = data.get("release-groups") or []
             groups += found
             if not found or len(groups) >= data.get("release-group-count", 0):
@@ -210,16 +220,16 @@ class MusicBrainz:
                 "status": release.get("status") or "", "tracks": tracks,
                 "label": next((i["label"].get("name") for i in release.get("label-info") or [] if i.get("label")), "")}
 
-    async def album(self, album_id, refresh=False, background=False):
+    def album(self, album_id, refresh=False, background=False):
         saved = None if refresh else self.store.details(album_id)
         if saved:
             return saved
-        group = await self.get(f"release-group/{album_id}", background=background, inc="artist-credits")
+        group = self.get(f"release-group/{album_id}", background=background, inc="artist-credits")
         details = self.summary(group)
         releases = []
         while True:
-            data = await self.get("release", background=background, **{"release-group": album_id},
-                                  inc="recordings artist-credits labels", limit=100, offset=len(releases))
+            data = self.get("release", background=background, **{"release-group": album_id},
+                            inc="recordings artist-credits labels", limit=100, offset=len(releases))
             found = data.get("releases") or []
             releases += found
             if not found or len(releases) >= data.get("release-count", 0) or len(releases) >= 300:
@@ -245,19 +255,18 @@ class Deezer:
     def __init__(self, web):
         self.web = web
 
-    async def photo(self, name):
+    def photo(self, name):
         try:
-            async with self.web.session().get("https://api.deezer.com/search/artist", params={"q": name, "limit": 10}) as response:
-                found = (await response.json(content_type=None)).get("data") or []
+            found = self.web.get("https://api.deezer.com/search/artist", params={"q": name, "limit": 10}).json().get("data") or []
             same = [a for a in found if words(a.get("name")) == words(name) and "/artist//" not in (a.get("picture_big") or "/artist//")]
             if not same:
                 return None
             link = max(same, key=lambda a: a.get("nb_fan") or 0)["picture_big"]
             if urlsplit(link).hostname.rsplit(".", 2)[-2:] != ["dzcdn", "net"]:
                 return None
-            async with self.web.session().get(link) as response:
-                return await response.read() if response.status == 200 else None
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            response = self.web.get(link)
+            return response.content if response.status_code == 200 else None
+        except (requests.RequestException, ValueError) as error:
             log.warning("Deezer call failed: %s", type(error).__name__)
             return None
 
@@ -288,13 +297,12 @@ class Indexers:
     def active(self):
         return [i for i in self.settings.data["indexers"] if i["key"]]
 
-    async def call(self, indexer, **params):
+    def call(self, indexer, **params):
         params = {"apikey": indexer["key"], **params}
         try:
-            async with self.web.session().get(indexer["url"] + "/api", params=params) as response:
-                body = await response.read()
-                status = response.status
-        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            response = self.web.get(indexer["url"] + "/api", params=params)
+            body, status = response.content, response.status_code
+        except requests.RequestException as error:
             log.warning("%s call failed: %s", indexer["name"], type(error).__name__)
             raise SourceError(f"{indexer['name']} isn't answering") from None
         if status == 429:
@@ -303,12 +311,12 @@ class Indexers:
             raise SourceError(f"{indexer['name']} refused the API key")
         return status, body
 
-    async def query(self, indexer, text, cat=AUDIO_CATEGORIES, offset=0):
+    def query(self, indexer, text, cat=AUDIO_CATEGORIES, offset=0):
         key = (indexer["name"], text, cat, offset)
         cached = self.cache.get(key)
         if cached and time.time() - cached[0] < CACHE_AGE:
             return cached[1]
-        status, body = await self.call(indexer, t="search", cat=cat, extended=1, limit=100, offset=offset, q=text)
+        status, body = self.call(indexer, t="search", cat=cat, extended=1, limit=100, offset=offset, q=text)
         try:
             root = ET.fromstring(body)
         except ET.ParseError:
@@ -333,45 +341,49 @@ class Indexers:
         self.cache[key] = (time.time(), items)
         return items
 
-    async def search(self, artist, title):
+    def search(self, artist, title):
         """Returns (items, problems). One indexer failing never loses the other's results."""
         forms = spellings(artist, title)
 
-        async def one(indexer):
+        def one(indexer):
             found = []
             for form in forms:
-                found += await self.query(indexer, form)
+                found += self.query(indexer, form)
             return found
 
-        return await self.pool(one)
+        return self.pool(one)
 
-    async def videos(self, artist):
+    def videos(self, artist):
         """Searches by artist alone: indexers rarely find a video by its song title."""
         forms = spellings(artist, "")
 
-        async def one(indexer):
+        def one(indexer):
             found = []
             for form in forms:
                 for offset in (0, 100, 200):
-                    page = await self.query(indexer, form, VIDEO_CATEGORY, offset)
+                    page = self.query(indexer, form, VIDEO_CATEGORY, offset)
                     found += page
                     if len(page) < 100:
                         break
             return found
 
-        return await self.pool(one)
+        return self.pool(one)
 
-    async def pool(self, one):
+    def pool(self, one):
+        """Every indexer at once, each in its own thread."""
         indexers = self.active()
         pooled, problems = [], []
-        for outcome in await asyncio.gather(*map(one, indexers), return_exceptions=True):
-            if isinstance(outcome, SourceError):
-                problems.append(str(outcome))
-            elif isinstance(outcome, Exception):
-                log.warning("Indexer search failed: %s", type(outcome).__name__)
-                problems.append("An indexer search failed")
-            else:
-                pooled += outcome
+        if indexers:
+            with ThreadPoolExecutor(len(indexers)) as workers:
+                futures = [workers.submit(one, indexer) for indexer in indexers]
+            for future in futures:
+                try:
+                    pooled += future.result()
+                except SourceError as error:
+                    problems.append(str(error))
+                except Exception as error:
+                    log.warning("Indexer search failed: %s", type(error).__name__)
+                    problems.append("An indexer search failed")
         seen, items = set(), []
         for item in pooled:
             key = (" ".join(item["title"].casefold().split()), item["size"])
@@ -381,11 +393,11 @@ class Indexers:
                 items.append(item)
         return items, problems
 
-    async def fetch(self, name, guid):
+    def fetch(self, name, guid):
         indexer = next((i for i in self.active() if i["name"] == name), None)
         if not indexer:
             raise SourceError(f"{name} isn't set up in Settings any more")
-        status, body = await self.call(indexer, t="get", id=guid)
+        status, body = self.call(indexer, t="get", id=guid)
         if status != 200 or b"<nzb" not in body[:4000]:
             match = re.search(rb'description="([^"]{1,120})"', body[:2000])
             detail = match.group(1).decode(errors="replace") if match else "it didn't send the NZB"
@@ -402,48 +414,46 @@ class Sabnzbd:
     def ready(self):
         return bool(self.settings.data["sab"]["key"] and self.settings.data["sab"]["url"])
 
-    async def call(self, mode, data=None, **params):
+    def call(self, mode, files=None, **params):
         sab = self.settings.data["sab"]
         params = {"mode": mode, "output": "json", "apikey": sab["key"], **params}
         try:
-            async with self.web.session().post(sab["url"] + "/api", params=params, data=data) as response:
-                if response.status != 200:
-                    raise SourceError("SABnzbd refused the request")
-                result = await response.json(content_type=None)
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            response = self.web.post(sab["url"] + "/api", params=params, files=files)
+            if response.status_code != 200:
+                raise SourceError("SABnzbd refused the request")
+            result = response.json()
+        except (requests.RequestException, ValueError) as error:
             log.warning("SABnzbd call failed: %s", type(error).__name__)
             raise SourceError("SABnzbd isn't answering") from None
         if isinstance(result, dict) and result.get("status") is False:
             raise SourceError(f"SABnzbd: {result.get('error') or 'it refused the request'}")
         return result
 
-    async def version(self):
-        return (await self.call("version")).get("version")
+    def version(self):
+        return self.call("version").get("version")
 
-    async def ensure_category(self):
+    def ensure_category(self):
         """Encore's own category, so nothing else's downloads are ever touched."""
-        categories = (await self.call("get_cats")).get("categories") or []
+        categories = self.call("get_cats").get("categories") or []
         if CATEGORY not in categories:
             folder = self.settings.data["folders"]["downloads"]
-            await self.call("set_config", section="categories", name=CATEGORY, dir=folder, pp=3)
+            self.call("set_config", section="categories", name=CATEGORY, dir=folder, pp=3)
 
-    async def add(self, nzb, name):
-        await self.ensure_category()
-        form = aiohttp.FormData()
-        form.add_field("name", nzb, filename=f"{name}.nzb", content_type="application/x-nzb")
-        result = await self.call("addfile", data=form, cat=CATEGORY, nzbname=name)
+    def add(self, nzb, name):
+        self.ensure_category()
+        result = self.call("addfile", files={"name": (f"{name}.nzb", nzb, "application/x-nzb")}, cat=CATEGORY, nzbname=name)
         ids = result.get("nzo_ids") or []
         if not ids:
             raise SourceError("SABnzbd wouldn't take the NZB")
         return ids[0]
 
-    async def state(self, nzo):
+    def state(self, nzo):
         """Returns ("queue", percent), ("working", status), ("done", folder), ("failed", why) or None."""
-        queue = (await self.call("queue", nzo_ids=nzo)).get("queue") or {}
+        queue = self.call("queue", nzo_ids=nzo).get("queue") or {}
         for slot in queue.get("slots") or []:
             if slot.get("nzo_id") == nzo:
                 return "queue", float(slot.get("percentage") or 0)
-        history = (await self.call("history", nzo_ids=nzo)).get("history") or {}
+        history = self.call("history", nzo_ids=nzo).get("history") or {}
         for slot in history.get("slots") or []:
             if slot.get("nzo_id") != nzo:
                 continue
@@ -455,9 +465,9 @@ class Sabnzbd:
             return "working", status or "Finishing"
         return None
 
-    async def forget(self, nzo):
+    def forget(self, nzo):
         for mode in ("queue", "history"):
             try:
-                await self.call(mode, name="delete", value=nzo, del_files=1)
+                self.call(mode, name="delete", value=nzo, del_files=1)
             except SourceError:
                 pass

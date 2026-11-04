@@ -4,6 +4,7 @@ Nothing here expires by itself: a Refresh button on the page is what fetches new
 """
 import json
 import sqlite3
+import threading
 import time
 
 SCHEMA = """
@@ -23,10 +24,22 @@ CREATE TABLE IF NOT EXISTS facts (name TEXT PRIMARY KEY, value TEXT);
 
 
 class Store:
+    """One connection per thread (the page's threads, the queue and the background jobs), in WAL
+    mode, so reads never wait on a write and a transaction always stays on its own connection."""
+
     def __init__(self, path):
-        self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
-        self.db.row_factory = sqlite3.Row
+        self.path = path
+        self.local = threading.local()
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+
+    @property
+    def db(self):
+        if not hasattr(self.local, "db"):
+            db = sqlite3.connect(self.path, isolation_level=None, timeout=15)
+            db.row_factory = sqlite3.Row
+            self.local.db = db
+        return self.local.db
 
     def rows(self, sql, *values):
         return self.db.execute(sql, values).fetchall()

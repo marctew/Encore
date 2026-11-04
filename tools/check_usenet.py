@@ -2,21 +2,28 @@
 
 Audio is generated with ffmpeg. Touches nothing real and sends nothing anywhere.
 """
-import asyncio
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from aiohttp import web
-import mutagen
-from mutagen.flac import FLAC
+os.environ.setdefault("ENCORE_DATA", tempfile.mkdtemp(prefix="encore-check-data-"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import server
-import sources
-from store import Store
+import mutagen
+from flask import Flask, Response, jsonify, request
+from mutagen.flac import FLAC
+from werkzeug.serving import make_server
+
+from encore import engine as server
+from encore import match, sources
+from encore import web as encore_web
+from encore.store import Store
 
 TONES = Path(tempfile.mkdtemp(prefix="encore-tones-"))
 SOURCE = [TONES / f"{n}.flac" for n in range(4)]
@@ -44,50 +51,50 @@ class Fakes:
         self.deleted = []
         self.cats = ["*"]
 
-    async def indexer(self, request):
-        seen.append(dict(request.query))
-        if request.query.get("apikey") != SECRET:
-            raise web.HTTPForbidden()
-        if request.query["t"] == "get":
-            return web.Response(body=b"<nzb></nzb>" if request.query["id"] != "nope" else b'<error code="429" description="Limit reached"/>')
-        if request.query["t"] == "caps":
-            return web.Response(text="<caps></caps>")
-        query = request.query["q"]
+    def indexer(self):
+        query = request.args
+        seen.append(dict(query))
+        if query.get("apikey") != SECRET:
+            return Response(status=403)
+        if query["t"] == "get":
+            return Response(b"<nzb></nzb>" if query["id"] != "nope" else b'<error code="429" description="Limit reached"/>')
+        if query["t"] == "caps":
+            return Response("<caps></caps>")
         items = ""
-        if query == "Test Band Can t Stop":
+        if query["q"] == "Test Band Can t Stop":
             items = ITEM.format(title="Test Band - Can.t Stop (1969) FLAC", guid="good", size=6 * 10**7)
-        return web.Response(text=RSS.format(items), content_type="application/xml")
+        return Response(RSS.format(items), content_type="application/xml")
 
-    async def sab(self, request):
-        mode = request.query["mode"]
-        ok = request.query.get("apikey") == SECRET
-        if not ok:
-            return web.json_response({"status": False, "error": "API Key Incorrect"})
+    def sab(self):
+        query = request.args
+        mode = query["mode"]
+        if query.get("apikey") != SECRET:
+            return jsonify({"status": False, "error": "API Key Incorrect"})
         if mode == "version":
-            return web.json_response({"version": "4.0"})
+            return jsonify({"version": "4.0"})
         if mode == "get_cats":
-            return web.json_response({"categories": self.cats})
+            return jsonify({"categories": self.cats})
         if mode == "set_config":
-            self.cats.append(request.query["name"])
-            return web.json_response({"status": True})
+            self.cats.append(query["name"])
+            return jsonify({"status": True})
         if mode == "addfile":
-            await request.post()
-            name = request.query["nzbname"]
+            assert request.files.get("name"), "the NZB arrives as a file"
+            name = query["nzbname"]
             nzo = f"SABnzbd_nzo_{len(self.hits)}"
             self.hits[nzo] = name
-            return web.json_response({"status": True, "nzo_ids": [nzo]})
-        if request.query.get("name") == "delete":
-            self.deleted.append(request.query["value"])
-            return web.json_response({"status": True})
-        nzo = request.query.get("nzo_ids")
+            return jsonify({"status": True, "nzo_ids": [nzo]})
+        if query.get("name") == "delete":
+            self.deleted.append(query["value"])
+            return jsonify({"status": True})
+        nzo = query.get("nzo_ids")
         if mode == "queue":
-            return web.json_response({"queue": {"slots": []}})
+            return jsonify({"queue": {"slots": []}})
         step = self.plan.get("step")
         if step and step[0] == "failed":
-            return web.json_response({"history": {"slots": [{"nzo_id": nzo, "status": "Failed", "fail_message": step[1]}]}})
+            return jsonify({"history": {"slots": [{"nzo_id": nzo, "status": "Failed", "fail_message": step[1]}]}})
         folder = server.DOWNLOADS / self.hits[nzo]
         self.plan["build"](folder)
-        return web.json_response({"history": {"slots": [{"nzo_id": nzo, "status": "Completed", "storage": self.plan.get("storage") or str(folder)}]}})
+        return jsonify({"history": {"slots": [{"nzo_id": nzo, "status": "Completed", "storage": self.plan.get("storage") or str(folder)}]}})
 
 
 def filing_name(job):
@@ -130,22 +137,26 @@ def build(numbers, tags=False, extra=()):
     return make
 
 
-async def run_job(queue, fakes, album, build_with=None, partial=False):
-    queue.brainz.album = lambda _: asyncio.sleep(0, album)
+def run_job(queue, fakes, album, build_with=None, partial=False):
+    queue.brainz.album = lambda _: album
     if build_with:
         fakes.plan = {"build": build_with}
     for _ in range(600):
-        await asyncio.sleep(0.05)
+        time.sleep(0.05)
         if queue.jobs[-1]["state"] in ("done", "failed") and queue.running is None:
             return queue.jobs[-1]
     raise TimeoutError
 
 
-def request_for(queue, job, path):
-    return SimpleNamespace(app={server.queue_key: queue}, match_info={"job": job["id"]}, path=path)
+def retry_through_the_page(queue, job, how):
+    """The same code the page's Get the rest / Import anyway buttons reach."""
+    page = Flask("check")
+    page.extensions["encore"] = SimpleNamespace(queue=queue)
+    with page.test_request_context():
+        encore_web.retry(job["id"], partial=how == "partial", keep_format=how == "import")
 
 
-async def main():
+def main():
     root = Path(tempfile.mkdtemp(prefix="encore-check-"))
     server.MUSIC, server.IMPORT, server.DOWNLOADS = root / "Music", root / "Import", root / "Encore"
     server.DATA, server.JOBS_FILE = root / "data", root / "data" / "jobs.json"
@@ -153,12 +164,11 @@ async def main():
     for folder in (server.MUSIC, server.IMPORT, server.DOWNLOADS, server.DATA):
         folder.mkdir()
     fakes = Fakes()
-    fake_app = web.Application()
-    fake_app.router.add_get("/api", fakes.indexer)
-    fake_app.router.add_post("/sab/api", fakes.sab)
-    runner = web.AppRunner(fake_app)
-    await runner.setup()
-    await web.TCPSite(runner, "127.0.0.1", 18999).start()
+    fake_app = Flask("fakes")
+    fake_app.add_url_rule("/api", "indexer", fakes.indexer)
+    fake_app.add_url_rule("/sab/api", "sab", fakes.sab, methods=["POST"])
+    runner = make_server("127.0.0.1", 18999, fake_app, threaded=True)
+    threading.Thread(target=runner.serve_forever, daemon=True).start()
 
     settings = sources.Settings(root / "data" / "settings.json")
     settings.data.update({"indexers": [{"name": "Fake", "url": "http://127.0.0.1:18999", "key": SECRET}],
@@ -178,9 +188,9 @@ async def main():
     brainz = SimpleNamespace(album=None)
     store = Store(root / "data" / "check.db")
     queue = server.Queue(indexers, sab, brainz, library, SimpleNamespace(linked=False), store)
-    worker = asyncio.create_task(queue.run())
+    threading.Thread(target=queue.run, daemon=True).start()
 
-    items, problems = await indexers.search("Test Band", "Can’t Stop")
+    items, problems = indexers.search("Test Band", "Can’t Stop")
     expect("split apostrophe spelling is tried", [i["title"] for i in items] == ["Test Band - Can.t Stop (1969) FLAC"], problems)
     expect("search leaves the key out of results", SECRET not in str(items))
     offer = items[0]
@@ -193,7 +203,7 @@ async def main():
     album = album_for([1, 2, 3, 4])
     store.want(album)
     job = enqueue(album)
-    finished = await run_job(queue, fakes, album, build([1, 2, 3, 4]))
+    finished = run_job(queue, fakes, album, build([1, 2, 3, 4]))
     expect("filing clears it from Wanted", not store.wanted_ids())
     expect("album with no tags files", finished["state"] == "done" and finished["where"] == "library", finished["message"])
     filed = sorted(p.name for p in (server.MUSIC / finished["folder"]).iterdir())
@@ -208,14 +218,14 @@ async def main():
     queue.jobs.clear()
     server.shutil.rmtree(server.MUSIC / "Test Band")
     job = enqueue(album)
-    finished = await run_job(queue, fakes, album, build([1, 2, 3]))
+    finished = run_job(queue, fakes, album, build([1, 2, 3]))
     expect("missing track is held", finished["state"] == "failed" and finished.get("can_partial") and finished.get("kept"), finished["message"])
     folder = Path(job["storage"])
     expect("kept for Get the rest", folder.exists())
-    await server.retry_job(request_for(queue, job, f"/api/queue/{job['id']}/partial"))
+    retry_through_the_page(queue, job, "partial")
     queue.wake.set()
     fakes.plan = {"build": lambda _: expect("no second download", False)}
-    finished = await run_job(queue, fakes, album)
+    finished = run_job(queue, fakes, album)
     expect("Get the rest files it", finished["state"] == "done" and "Missing" in finished["message"], finished["message"])
     expect("three tracks filed", len(list((server.MUSIC / finished["folder"]).glob("*.flac"))) == 3)
 
@@ -226,19 +236,19 @@ async def main():
         track["title"], track["seconds"] = f"Quite Different Name {number}", 999
     other["editions"] = [edition(other["tracks_list"])]
     enqueue(other)
-    finished = await run_job(queue, fakes, other, build([1, 2, 3, 4]))
+    finished = run_job(queue, fakes, other, build([1, 2, 3, 4]))
     expect("wrong album refused", finished["state"] == "failed" and "isn't the album" in finished["message"], finished["message"])
     expect("wrong album not filed", not list(server.MUSIC.iterdir()) and not list(server.IMPORT.iterdir()))
     expect("wrong album removed", not list(server.DOWNLOADS.iterdir()))
 
     queue.jobs.clear()
     enqueue(album)
-    finished = await run_job(queue, fakes, album, build([1, 2, 3, 4], extra=[("setup.exe", b"MZ")]))
+    finished = run_job(queue, fakes, album, build([1, 2, 3, 4], extra=[("setup.exe", b"MZ")]))
     expect("program refused", finished["state"] == "failed" and "setup.exe" in finished["message"], finished["message"])
 
     queue.jobs.clear()
     enqueue(album)
-    finished = await run_job(queue, fakes, album, build([1, 2, 3, 4], extra=[("05.mp3", b"x" * 500)]))
+    finished = run_job(queue, fakes, album, build([1, 2, 3, 4], extra=[("05.mp3", b"x" * 500)]))
     expect("surprise format waits for a choice", finished["state"] == "failed" and finished.get("can_import") and finished.get("kept"), finished["message"])
 
     queue.jobs.clear()
@@ -258,13 +268,13 @@ async def main():
     for track in lossy["tracks_list"]:
         track["seconds"] = round(mutagen.File(mp3s / f"{track['number']:02d} - {track['title']}.mp3").info.length)
     job = enqueue(lossy)
-    finished = await run_job(queue, fakes, lossy, build_mp3)
+    finished = run_job(queue, fakes, lossy, build_mp3)
     expect("MP3 not chosen waits", finished["state"] == "failed" and finished.get("can_import"), finished["message"])
     folder = Path(job["storage"])
-    await server.retry_job(request_for(queue, job, f"/api/queue/{job['id']}/import"))
+    retry_through_the_page(queue, job, "import")
     queue.wake.set()
     fakes.plan = {"build": lambda _: expect("no second download for import", False)}
-    finished = await run_job(queue, fakes, lossy)
+    finished = run_job(queue, fakes, lossy)
     expect("Import anyway files it", finished["state"] == "done" and finished["where"] == "library", finished["message"])
     filed = sorted(p.name for p in (server.MUSIC / finished["folder"]).iterdir())
     expect("MP3 names and tags", "01 - Come Together.mp3" in filed and finished["quality"].startswith("MP3"), [filed[0], finished["quality"]])
@@ -274,7 +284,7 @@ async def main():
 
     queue.jobs.clear()
     queue.add(lossy, offer, True, True)
-    finished = await run_job(queue, fakes, lossy, build_mp3)
+    finished = run_job(queue, fakes, lossy, build_mp3)
     expect("chosen MP3 files straight away", finished["state"] == "done" and finished["where"] == "library", finished["message"])
     server.shutil.rmtree(server.MUSIC / "Test Band")
 
@@ -283,13 +293,13 @@ async def main():
         folder.mkdir(exist_ok=True)
         (folder / "readme.txt").write_text("x")
     queue.add(lossy, offer, True, True)
-    finished = await run_job(queue, fakes, lossy, build_junk)
+    finished = run_job(queue, fakes, lossy, build_junk)
     expect("no music still refused", finished["state"] == "failed" and "No music" in finished["message"], finished["message"])
 
     queue.jobs.clear()
     short = album_for([1, 2, 3])
     enqueue(short)
-    finished = await run_job(queue, fakes, short, build([1, 2, 3, 4], tags=True))
+    finished = run_job(queue, fakes, short, build([1, 2, 3, 4], tags=True))
     expect("unlisted bonus track goes to MusicImport", finished["state"] == "done" and finished["where"] == "import", finished["message"])
     expect("nothing in the library from it", not list(server.MUSIC.iterdir()))
 
@@ -299,20 +309,20 @@ async def main():
     outside.mkdir()
     (outside / "keep.txt").write_text("x")
     fakes.plan = {"build": lambda _: None, "storage": str(outside)}
-    finished = await run_job(queue, fakes, album)
+    finished = run_job(queue, fakes, album)
     expect("folder outside Downloads refused", finished["state"] == "failed" and "can't use" in finished["message"], finished["message"])
     expect("folder outside Downloads untouched", (outside / "keep.txt").exists())
 
     queue.jobs.clear()
     enqueue(album)
     fakes.plan = {"step": ("failed", "Aborted, cannot be completed")}
-    finished = await run_job(queue, fakes, album)
+    finished = run_job(queue, fakes, album)
     expect("SABnzbd failure reported", finished["state"] == "failed" and "Aborted" in finished["message"], finished["message"])
 
     queue.jobs.clear()
     offer = {**offer, "guid": "nope"}
     enqueue(album)
-    finished = await run_job(queue, fakes, album)
+    finished = run_job(queue, fakes, album)
     expect("indexer refusal reported", finished["state"] == "failed" and "Limit reached" in finished["message"], finished["message"])
     expect("key never in a message", SECRET not in str(queue.jobs))
 
@@ -332,7 +342,7 @@ async def main():
     artist = {"id": "a", "name": "Test Band"}
     verdict = {"song": "Great Song"}
     job = queue.add_video(artist, offer, verdict)
-    finished = await run_job(queue, fakes, album, build_video)
+    finished = run_job(queue, fakes, album, build_video)
     expect("video filed for Plex", finished["state"] == "done" and (server.MUSIC / "Test Band" / "Great Song-video.mp4").exists(), [finished["message"], finished["quality"]])
     expect("video quality read", finished["quality"].startswith("360p"), finished["quality"])
     expect("video download cleared", job["storage"] is None)
@@ -348,20 +358,19 @@ async def main():
     job = queue.add_video(artist, offer, {"song": "Lone File"})
     fakes.plan["storage"] = str(server.DOWNLOADS / filing_name(job) / "only.mkv")
     build_single(server.DOWNLOADS / filing_name(job))
-    finished = await run_job(queue, fakes, album)
+    finished = run_job(queue, fakes, album)
     expect("SABnzbd naming the file itself works", finished["state"] == "done" and (server.MUSIC / "Test Band" / "Lone File-video.mkv").exists(), finished["message"])
     expect("single file's folder cleared", not Path(single["file"]).parent.exists())
     queue.add_video(artist, offer, verdict)
-    finished = await run_job(queue, fakes, album, build_video)
+    finished = run_job(queue, fakes, album, build_video)
     expect("video never overwritten", finished["state"] == "failed" and "already have" in finished["message"], finished["message"])
     def build_audio_only(folder):
         if not folder.exists():
             folder.mkdir()
             (folder / "not-a-video.mp4").write_bytes(b"x" * 5000)
     queue.add_video(artist, offer, {"song": "Other"})
-    finished = await run_job(queue, fakes, album, build_audio_only)
+    finished = run_job(queue, fakes, album, build_audio_only)
     expect("fake video refused", finished["state"] == "failed" and "playable" in finished["message"], finished["message"])
-    import match
     songs = {"Coldplay_Feat_Rihanna-Princess_Of_China-x264-2012-SRPx": "Princess Of China",
              "Coldplay-Adventure_Of_A_Lifetime-DDC-720p-x264-2015-LOVERS": "Adventure Of A Lifetime",
              'Just a dump: (with 15_percent pars) "Coldplay - The Scientist.mpg.vol21+18.PAR2"': "The Scientist",
@@ -373,13 +382,10 @@ async def main():
     live = match.score_video("Coldplay", {"title": "Coldplay-Higher_Power_(Radio_1s_Big_Weekend_2021)-720p-x264-2021-SRPx", "size": 183 * 10**6})
     expect("live marked", live["tier"] == "maybe" and "Live performance" in live["notes"], live)
 
-    worker.cancel()
-    await site.close()
-    await runner.cleanup()
-    store.db.close()
+    runner.shutdown()
     shutil.rmtree(root, ignore_errors=True)
     shutil.rmtree(TONES, ignore_errors=True)
 
 
-asyncio.run(main())
+main()
 sys.exit(0 if all(results) else 1)
