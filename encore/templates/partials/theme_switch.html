@@ -1,0 +1,9 @@
+{#- Light / dark / system, as a three-way segmented control. Saves to localStorage; post it to the server instead if the app has a theme setting. -#}
+{%- from "macros/icons.html" import icon -%}
+<div class="segmented" role="radiogroup" aria-label="Theme" style="margin:12px 12px 0">
+  {% for value, label, glyph in [('light', 'Light', 'sun'), ('dark', 'Dark', 'moon'), ('system', 'System', 'monitor')] %}
+  <button type="button" role="radio" title="{{ label }}" aria-label="{{ label }} theme" data-theme-set="{{ value }}"
+          onclick="try{localStorage.setItem('theme',this.dataset.themeSet)}catch(e){};location.reload()">{{ icon(glyph, 'icon-sm') }}</button>
+  {% endfor %}
+</div>
+<script>document.querySelectorAll("[data-theme-set]").forEach(function (b) { b.setAttribute("aria-checked", b.dataset.themeSet === document.documentElement.dataset.themePref); });</script>

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block main %}
+<div class="encore-layout" id="layout" data-view="{{ view }}"{% if artist_id %} data-artist="{{ artist_id }}"{% endif %}>
+  <div class="encore-page" id="page">
+    <div class="page-header" id="pageHeader">
+      <div><h1 class="h1" id="viewTitle">Find</h1><p id="viewSub">Search your library, then everywhere else</p></div>
+      <div class="row" id="viewActions"></div>
+    </div>
+
+    <form class="card card-pad find" id="find" role="search">
+      <div class="segmented seg-text" role="radiogroup" aria-label="Search by">
+        <button type="button" role="radio" data-mode="albums" aria-checked="true">Albums</button>
+        <button type="button" role="radio" data-mode="artist" aria-checked="false">Artist</button>
+      </div>
+      <div class="find-box">
+        {{ icon('search', 'icon find-icon') }}
+        <input class="input" id="query" type="search" placeholder="Artist or album" aria-label="Search for music" autocomplete="off" autofocus>
+      </div>
+      <button class="btn btn-primary">Search</button>
+      <label class="check find-hide"><input type="checkbox" id="hideOwned"><span>Hide albums I have</span></label>
+    </form>
+
+    <section id="viewArtist" hidden></section>
+    <section id="viewLibrary" hidden></section>
+    <section id="viewWanted" hidden></section>
+    <section id="viewFind">
+      <div id="local"></div>
+      <div class="fresh" id="fresh"></div>
+      <p class="hidden-count small muted" id="hiddenCount" aria-live="polite"></p>
+      <div id="results"></div>
+    </section>
+  </div>
+
+  <aside class="card queue-panel" id="queuePanel" aria-label="Queue">
+    <div class="queue-head">
+      <h2 class="h2">Queue</h2>
+      <button type="button" class="btn btn-ghost btn-sm" id="clearDone" hidden>Clear finished</button>
+    </div>
+    <label class="check queue-setting"><input type="checkbox" id="fix">
+      <span>Use the album artist on every track
+        <span class="hint" style="display:block">Except on compilations. Applies to albums you add from now on, and is remembered on this device.</span></span></label>
+    <div class="jobs" id="jobs" aria-live="polite"></div>
+  </aside>
+</div>
+<dialog id="detail" class="encore-dialog" aria-label="Album details"></dialog>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='encore.js') }}"></script>{% endblock %}

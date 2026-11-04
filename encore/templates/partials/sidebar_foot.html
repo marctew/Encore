@@ -1,0 +1,18 @@
+{#- Design Uniformity: the sidebar footer (spec 7.15). The same three things, in the same place, in every app:
+    Sign out, the theme switch, and the version line linking to About. Nothing else goes in here: app-specific
+    controls sit above it, so these never move.
+      {% with signout_url=url_for('auth.logout'), about_url=url_for('about') %}{% include "partials/sidebar_foot.html" %}{% endwith %}
+    signout_url: leave it out when the app has no login (or it's switched off). about_url defaults to /about.
+    Needs du_flask.init_design(..., version=...) for app_version and app_sha(). -#}
+{%- from "macros/icons.html" import icon -%}
+<div class="sidebar-foot">
+  {% if signout_url %}
+  <form method="post" action="{{ signout_url }}">
+    {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
+    <button type="submit" class="nav-link">{{ icon('logout', 'icon') }}Sign out</button>
+  </form>
+  {% endif %}
+  {% include "partials/theme_switch.html" %}
+  {% set sha = app_sha() if app_sha is defined else '' %}
+  <a href="{{ about_url or '/about' }}" class="version-link">{% if app_version %}v{{ app_version }}{% if sha %} · {{ sha }}{% endif %} · {% endif %}About</a>
+</div>

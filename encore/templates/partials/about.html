@@ -1,0 +1,45 @@
+{#- Design Uniformity: the About page's content (spec 7.15), as Binge Stats has it. Three cards:
+    the app (icon, name, version · SHA, then runtime facts), Your data, and Built with.
+    The app's /about route renders its own page that extends its base and includes this, with `about`:
+      about = {
+        "tagline": "Browse the sorted library by performer and studio",
+        "github": "https://github.com/marctew/backroom",          # optional
+        "name": ("The Back", "Room"),                              # second part takes the gradient
+        "icon": url_for("static", filename="icon.svg"),
+        "facts": [("Releases indexed", "5,904"), ...],             # after Python and SQLite
+        "data": [("Database", "37 MB"), ...],
+        "data_note": "Everything lives in /var/lib/...",            # optional, may hold <code> (mark it |safe yourself)
+        "built_with": ["Flask and SQLite", ...],                    # list items; may hold links (|safe)
+        "footnote": "",                                             # optional small print under Built with
+      } -#}
+{% set sha = app_sha() if app_sha is defined else '' %}
+<div class="page-header">
+  <div><h1 class="h1">About</h1><p>{{ about.tagline }}</p></div>
+  {% if about.github %}<div class="row"><a href="{{ about.github }}" class="btn btn-ghost" target="_blank" rel="noopener">GitHub</a></div>{% endif %}
+</div>
+<div class="about-grid">
+  <section class="card card-pad">
+    <div class="about-id">
+      <img src="{{ about.icon }}" alt="">
+      <div><div class="about-name">{{ about.name[0] }} <span class="brand-gradient">{{ about.name[1] }}</span></div>
+        <div class="small muted tabular">{% if app_version %}v{{ app_version }}{% endif %}{% if sha %} · {{ sha }}{% endif %}</div></div>
+    </div>
+    <dl class="kv-list">
+      {% for k, v in (runtime_facts() if runtime_facts is defined else []) + (about.facts or []) %}
+      <div><dt>{{ k }}</dt><dd>{{ v }}</dd></div>
+      {% endfor %}
+    </dl>
+  </section>
+  <section class="card card-pad">
+    <h2 class="h2">Your data</h2>
+    <dl class="kv-list">
+      {% for k, v in about.data or [] %}<div><dt>{{ k }}</dt><dd class="tabular">{{ v }}</dd></div>{% endfor %}
+    </dl>
+    {% if about.data_note %}<p class="hint about-note">{{ about.data_note }}</p>{% endif %}
+  </section>
+  <section class="card card-pad">
+    <h2 class="h2">Built with</h2>
+    <ul class="about-list">{% for item in about.built_with or [] %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% if about.footnote %}<p class="hint about-note">{{ about.footnote }}</p>{% endif %}
+  </section>
+</div>

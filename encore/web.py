@@ -11,9 +11,10 @@ import time
 from collections import deque
 from types import SimpleNamespace
 
-from flask import Blueprint, Flask, Response, current_app, jsonify, redirect, request, send_file
+from flask import Blueprint, Flask, Response, current_app, jsonify, redirect, render_template, request, send_file, url_for
+from markupsafe import Markup
 
-from . import engine, match
+from . import __version__, engine, match
 from .auth import MIN_LENGTH, SESSION_DAYS, Auth
 from .config import DATA, PHOTOS, TRUSTED_PROXY
 from .engine import ACTIVE, Library, Owned, Queue, album_key, folders_ready, public, use_folders
@@ -26,7 +27,9 @@ PLEX_SYNC = 3600
 PHOTO_RETRY = 30 * 86400
 ARTIST_LIMIT = 12
 COOKIE = "encore_session"
-OPEN_PATHS = ("/login", "/api/login", "/healthz")
+OPEN_PATHS = ("/login", "/api/login", "/healthz", "/favicon.ico")
+# Plain form posts (the sidebar's Sign out). Signing out is the only one, and it can't harm anything.
+FORM_POSTS = ("/logout",)
 ALBUM_ID = re.compile(r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 ORDER = {"good": 0, "maybe": 1, "no": 2}
 
@@ -410,7 +413,7 @@ def login_page():
     auth = svc().auth
     if not auth.enabled or auth.valid(request.cookies.get(COOKIE)):
         return redirect("/")
-    return send_file(current_app.static_folder + "/login.html")
+    return render_template("login.html")
 
 
 @bp.post("/api/login")
@@ -615,9 +618,99 @@ def plex_check(pin):
     return jsonify(linked=svc().plex.check_link(pin))
 
 
+def page(template, **context):
+    """With a password on, the guard has already checked the session, so anyone here is signed in."""
+    return render_template(template, signed_in=svc().auth.enabled, **context)
+
+
 @bp.get("/")
 def index():
-    return send_file(current_app.static_folder + "/index.html")
+    return page("index.html", view="find")
+
+
+@bp.get("/library")
+def library_view():
+    return page("index.html", view="library")
+
+
+@bp.get("/wanted")
+def wanted_view():
+    return page("index.html", view="wanted")
+
+
+@bp.get("/queue")
+def queue_view():
+    return page("index.html", view="queue")
+
+
+@bp.get("/artist/<artist_id>")
+def artist_view(artist_id):
+    return page("index.html", view="artist", artist_id=checked_id(artist_id, "artist"))
+
+
+@bp.get("/favicon.ico")
+def favicon():
+    return redirect(url_for("static", filename="icon.svg"), 301)
+
+
+@bp.get("/settings")
+def settings_view():
+    return page("settings.html", view="settings")
+
+
+def disk_size(path):
+    if path.is_file():
+        return path.stat().st_size
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) if path.is_dir() else 0
+
+
+def size_text(n):
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "bytes" else f"{n:.1f} {unit}".replace(".0 ", " ")
+        n /= 1024
+
+
+@bp.get("/about")
+def about():
+    """Design Uniformity 7.15: the app, Your data, Built with."""
+    from importlib.metadata import version as pkg_version
+    s = svc()
+    db = s.store.db
+    count = lambda table: f"{db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:,}"  # noqa: E731
+    try:
+        server = "gunicorn " + pkg_version("gunicorn")
+    except Exception:  # noqa: BLE001  (python -m encore runs Flask's own server)
+        server = "Flask's development server"
+    plex = {"ok": "Connected", "error": "Can't reach it", "unset": "Not set up"}.get(s.plex.status(), "Not connected")
+    database = disk_size(DATA / "encore.db") + disk_size(DATA / "encore.db-wal")
+    info = {
+        "tagline": "Finds albums on Usenet, checks every track, and files them where Plex can see them",
+        "github": "https://github.com/marctew/Encore",
+        "name": ("", "Encore"), "icon": url_for("static", filename="icon.svg"),
+        "facts": [("Server", server), ("Plex", plex), ("Indexers", str(len(s.indexers.active())))],
+        "data": [("Artists in Plex", count("plex_artists")), ("Albums in Plex", count("plex_albums")),
+                 ("Artists looked up", count("artists")), ("Albums looked up", count("albums")),
+                 ("Wanted", count("wanted")), ("Jobs in the queue", f"{len(s.queue.jobs):,}"),
+                 ("Database", size_text(database)), ("Artist photos", size_text(disk_size(PHOTOS)))],
+        "data_note": Markup("Everything lives in <code>{}</code>: the database, settings, the queue, "
+                            "the Plex sign-in and artist photos.").format(DATA),
+        "built_with": ["Flask, SQLite and gunicorn",
+                       "MusicBrainz for artists, albums and track lists",
+                       "Newznab indexers and SABnzbd for downloads",
+                       "mutagen for checking and tagging files",
+                       "Plex for what you own, and Deezer for artist photos",
+                       "Design Uniformity for the look"],
+        "footnote": "Not affiliated with Plex, MusicBrainz, Deezer or SABnzbd.",
+    }
+    return page("about.html", view="about", about=info)
+
+
+@bp.post("/logout")
+def log_out_form():
+    response = redirect("/login" if svc().auth.enabled else "/")
+    response.delete_cookie(COOKIE)
+    return response
 
 
 # ---------------------------------------------------------------- the app
@@ -625,10 +718,13 @@ def index():
 def guard():
     """Every change needs the page's own header, so another site can't post here, and with a
     password on, everything but the sign-in and /healthz needs a valid session."""
-    if request.method not in ("GET", "HEAD") and request.headers.get("X-Encore") != "1":
+    # The shared Design system card sends X-CSRF-Token (with csrf_token() below) instead of X-Encore.
+    page_sent = request.headers.get("X-Encore") == "1" or request.headers.get("X-CSRF-Token") == "1"
+    if request.method not in ("GET", "HEAD") and not page_sent and request.path not in FORM_POSTS:
         raise Refusal(403, "Missing request header")
     auth = svc().auth
-    if auth.enabled and request.path not in OPEN_PATHS and not auth.valid(request.cookies.get(COOKIE)):
+    open_path = request.path in OPEN_PATHS or request.path.startswith("/static/")
+    if auth.enabled and not open_path and not auth.valid(request.cookies.get(COOKIE)):
         if request.path.startswith("/api/"):
             return jsonify(error="Sign in first"), 401
         return redirect("/login")
@@ -666,6 +762,14 @@ def create_app():
     s.owned.load(store)
     app.extensions["encore"] = s
     app.register_blueprint(bp)
+    try:
+        from .du_flask import init_design      # copied in by the design updater, so it may not be here yet
+    except ImportError:
+        init_design = None
+    if init_design:
+        init_design(app, DATA / "design", version=__version__)
+    # Not a secret: another site can't send a custom header, which is all the guard needs.
+    app.jinja_env.globals["csrf_token"] = lambda: "1"
     app.before_request(guard)
     app.after_request(harden)
 

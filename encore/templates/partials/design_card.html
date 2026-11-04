@@ -1,0 +1,26 @@
+{# Design Uniformity: the design updater's card for a Settings page (spec 7.14).
+   Needs du_flask.init_design(app, state_dir) and static/design/design-card.js on the page.
+   {% include "partials/design_card.html" %} #}
+{% set ds = design_status() %}
+<section class="card card-pad stack" data-design-card data-badge="badge badge-{tone}"{% if csrf_token is defined %} data-csrf="{{ csrf_token() }}"{% endif %}>
+  <div class="row-between">
+    <h2 class="h2">Design system</h2>
+    <span data-du="label" class="badge badge-{{ ds.tone }}">{{ ds.label }}</span>
+  </div>
+  <div>
+    <div class="tabular"><span data-du="version">{{ ds.version }}</span>{% if ds.date %} · <span data-du="date">{{ ds.date }}</span>{% endif %}</div>
+    <div class="small muted" data-du="checked">Last checked {{ ds.checked }}</div>
+  </div>
+  <p class="small" data-du="message" {{ 'hidden' if not ds.message }}>{{ ds.message }}</p>
+  <div class="banner banner-warning" data-du="warning" role="status" {{ 'hidden' if not ds.warning }}>{{ ds.warning }}</div>
+  <label class="check">
+    <input type="checkbox" data-du="auto" {{ 'checked' if ds.auto }}>
+    <span>Automatic updates
+      <span class="hint" style="display:block">Checks GitHub each night for a new stable release of the shared design. It only changes how the app looks; nothing else is touched.</span>
+    </span>
+  </label>
+  <div class="row">
+    <button type="button" class="btn btn-ghost" data-du-act="check" {{ 'disabled' if ds.busy }}>Check now</button>
+    <button type="button" class="btn btn-ghost" data-du-act="rollback" {{ 'disabled' if ds.busy or not ds.can_rollback }}>{{ 'Roll back to ' ~ ds.previous if ds.previous else 'Roll back' }}</button>
+  </div>
+</section>

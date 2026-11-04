@@ -1,0 +1,62 @@
+{#- Encore's shell, from Design Uniformity's templates/base.html: sidebar on desktop, top bar and bottom nav
+    on phones. Downloads category, so the blue accent. No Alpine or htmx: the page's own modules do the rest.
+    Find, Library, Wanted and Queue are views of one page (encore.js switches them without a reload), so
+    their links carry data-view; on wide screens the queue sits beside the page and its link is hidden. -#}
+{% from "macros/icons.html" import icon %}
+{% set nav = [
+  ('find', '/', 'Find', 'search'),
+  ('library', '/library', 'Library', 'music'),
+  ('wanted', '/wanted', 'Wanted', 'star'),
+  ('queue', '/queue', 'Queue', 'download'),
+  ('settings', '/settings', 'Settings', 'settings'),
+] %}
+{% set here = view | default('') %}
+<!doctype html>
+<html lang="en-GB" class="accent-blue" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  {% include "partials/theme_head.html" %}
+  <title>{% block title %}Encore{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design/uniform.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design/accents.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='encore.css') }}">
+  <script src="{{ url_for('static', filename='design/confirm.js') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a href="/" class="brand" data-view="find"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
+    <nav class="nav" aria-label="Sections">
+      {% for key, href, label, glyph in nav %}
+      <a href="{{ href }}" class="nav-link{{ ' active' if here == key }}{{ ' nav-queue' if key == 'queue' }}"{% if key != 'settings' %} data-view="{{ key }}"{% endif %}>{{ icon(glyph, 'icon') }}<span class="nav-label">{{ label }}</span>{% if key in ('wanted', 'queue') %}<span class="nav-count" data-count="{{ key }}" hidden></span>{% endif %}</a>
+      {% endfor %}
+    </nav>
+    <div class="side-status" id="sideStatus" aria-live="polite"></div>
+    {% with signout_url='/logout' if signed_in else None, about_url='/about' %}{% include "partials/sidebar_foot.html" %}{% endwith %}
+  </aside>
+
+  <header class="topbar">
+    <a href="/" class="brand topbar-brand" data-view="find"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
+    {% if signed_in %}
+    <form method="post" action="/logout"><button class="btn-icon" aria-label="Sign out" title="Sign out">{{ icon('logout', 'icon') }}</button></form>
+    {% endif %}
+  </header>
+
+  <main class="main">
+    <div id="banners"></div>
+    {% block main %}{% endblock %}
+  </main>
+
+  <nav class="bottom-nav" aria-label="Sections">
+    {% for key, href, label, glyph in nav %}
+    <a href="{{ href }}" class="{{ 'active' if here == key }}"{% if key != 'settings' %} data-view="{{ key }}"{% endif %}><span class="bn-icon">{{ icon(glyph, 'icon') }}{% if key in ('wanted', 'queue') %}<span class="nav-count" data-count="{{ key }}" hidden></span>{% endif %}</span>{{ label }}</a>
+    {% endfor %}
+  </nav>
+</div>
+<div id="toasts" class="toasts"></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

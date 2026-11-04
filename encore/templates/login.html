@@ -1,0 +1,38 @@
+{#- The sign-in page: the shared look without the shell, since nothing behind it is reachable yet. -#}
+<!doctype html>
+<html lang="en-GB" class="accent-blue" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  {% include "partials/theme_head.html" %}
+  <title>Sign in · Encore</title>
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design/uniform.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design/accents.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='encore.css') }}">
+</head>
+<body class="signin">
+<form class="card card-pad signin-card" id="login">
+  <div class="brand signin-brand"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></div>
+  <label class="field"><span class="label">Password</span>
+    <input class="input" id="password" type="password" autocomplete="current-password" autofocus required></label>
+  <button class="btn btn-primary signin-button" id="submit">Sign in</button>
+  <p class="signin-problem small" id="problem" role="alert"></p>
+</form>
+<script>
+document.getElementById('login').onsubmit = async event => {
+  event.preventDefault();
+  const problem = document.getElementById('problem'), button = document.getElementById('submit');
+  problem.textContent = '';
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/login', { method: 'POST', headers: { 'X-Encore': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: document.getElementById('password').value }) });
+    if (res.ok) return location.replace('/');
+    problem.textContent = (await res.json()).error || 'That didn’t work.';
+  } catch { problem.textContent = 'Encore isn’t answering.'; }
+  button.disabled = false;
+};
+</script>
+</body>
+</html>

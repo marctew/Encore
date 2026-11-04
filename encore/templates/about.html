@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}About · Encore{% endblock %}
+{% block main %}
+{% include "partials/about.html" %}
+{% endblock %}
+{% block scripts %}<script type="module">import { refreshHealth } from "{{ url_for('static', filename='shell.js') }}"; refreshHealth();</script>{% endblock %}

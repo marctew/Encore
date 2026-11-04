@@ -1,0 +1,26 @@
+/* Design Uniformity: accent families, one per app category (DESIGN-SPEC.md 3.3). Load after uniform.css / the Tailwind entry, then put the
+ * class on <html> (e.g. <html class="accent-teal" data-theme="dark">). Neutrals and status colours never change.
+ * Contrast of button text on the accent was checked for each (WCAG ratio in brackets). */
+
+/* Media. Violet to pink: Binge Stats (the default; no class needed). White text: dark 4.2, light 5.7. */
+
+/* Downloads. Blue to indigo. White text: dark 3.7 (fine at 14px medium), light 5.2. */
+.accent-blue, .accent-blue[data-theme="dark"] { --accent: 59 130 246; --accent-2: 99 102 241; --on-accent: 255 255 255; }
+.accent-blue[data-theme="light"] { --accent: 37 99 235; --accent-2: 79 70 229; --on-accent: 255 255 255; }
+
+/* Home. Teal to cyan. Bright in the dark theme, so dark text on buttons (7.9); light theme deepened for white (5.5). */
+.accent-teal, .accent-teal[data-theme="dark"] { --accent: 20 184 166; --accent-2: 6 182 212; --on-accent: 9 11 17; }
+.accent-teal[data-theme="light"] { --accent: 15 118 110; --accent-2: 14 116 144; --on-accent: 255 255 255; }
+
+/* Infrastructure. Graphite (slate, no hue). Near-white in the dark theme, so dark text on buttons (13.2);
+ * deep slate in light for white (10.4). Being near the text colour, its active states lean on the tint, not the hue. */
+.accent-graphite, .accent-graphite[data-theme="dark"] { --accent: 203 213 225; --accent-2: 100 116 139; --on-accent: 9 11 17; }
+.accent-graphite[data-theme="light"] { --accent: 51 65 85; --accent-2: 100 116 139; --on-accent: 255 255 255; }
+
+/* Files and tools. Fuchsia to purple. Dark text in the dark theme (5.7, white only reaches 3.5);
+ * light theme deepened for white (6.3). 34 degrees of hue from Media's violet, so check them side by side. */
+.accent-fuchsia, .accent-fuchsia[data-theme="dark"] { --accent: 217 70 239; --accent-2: 168 85 247; --on-accent: 9 11 17; }
+.accent-fuchsia[data-theme="light"] { --accent: 162 28 175; --accent-2: 126 34 206; --on-accent: 255 255 255; }
+
+/* Not offered: green (reads as success), amber or orange (warning), red or rose (danger), sky (info).
+ * An accent must never be mistaken for a status. */

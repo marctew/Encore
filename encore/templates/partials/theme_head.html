@@ -1,0 +1,14 @@
+{#- Sets data-theme before first paint, so there's no flash. Pref is "light", "dark" or "system" (server-side setting,
+    or localStorage "theme" for apps without logins). "system" follows the OS and reloads when it flips, so charts redraw. -#}
+<meta name="theme-color" content="#090b11">
+<script>
+(function () {
+  var pref = {{ (theme_pref | default('system')) | tojson }}, root = document.documentElement;
+  try { pref = localStorage.getItem("theme") || pref; } catch (e) {}
+  root.dataset.themePref = pref;
+  var mq = window.matchMedia("(prefers-color-scheme: light)");
+  root.dataset.theme = pref === "system" ? (mq.matches ? "light" : "dark") : pref;
+  if (pref === "system") mq.addEventListener("change", function () { location.reload(); });
+  document.querySelector('meta[name="theme-color"]').content = root.dataset.theme === "light" ? "#f5f6fa" : "#090b11";
+})();
+</script>

@@ -36,7 +36,7 @@ Open `http://your-server:3346`, go to **Settings**, and add:
 |---|---|
 | Indexers | The address and API key of each Newznab indexer |
 | SABnzbd | Its address and API key. Encore creates its own `encore` category |
-| Plex | Optional. Its address, then press **Connect Plex** at the top of the page |
+| Plex | Optional. Its address, then press **Connect Plex** in the banner that appears |
 | Music library | Where albums are filed, as `Artist/Album (Year)` |
 | Import folder | Albums that need you to decide, such as ones you already own |
 | Downloads | Where SABnzbd puts Encore's downloads |
@@ -72,6 +72,8 @@ cd /opt/encore && venv/bin/python tools/check_usenet.py && venv/bin/python tools
 `sudo /opt/encore/scripts/update.sh --pull` pulls, installs anything new, checks the code compiles and restarts, waiting if an album is being checked or filed. Running `install.sh` again does the same.
 
 Encore is a Flask app served by gunicorn (`wsgi.py`, one worker), as the `encore` systemd service. Its data (settings, the queue, the database, photos) is in `/var/lib/encore`; set `ENCORE_DATA` to move it. `/healthz` answers without a sign-in, for uptime monitors. For development, `python -m encore` runs it on its own.
+
+The look comes from [Design Uniformity](https://github.com/marctew/design-uniformity), vendored in `encore/static/design`, `encore/templates/partials` and `encore/du_flask.py`. Those files are replaced by its updater, so change them there, not here. Settings has a **Design system** card for it, which only works once the updater is installed on the host.
 
 ## Note
 

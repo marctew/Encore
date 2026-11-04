@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Settings · Encore{% endblock %}
+{% block main %}
+<div class="page-header">
+  <div><h1 class="h1">Settings</h1><p>Where Encore searches, downloads and files albums</p></div>
+</div>
+<div class="settings">
+  <form id="connections" class="settings-group" autocomplete="off">
+    <section class="card card-pad">
+      <div class="row-between"><h2 class="h2">Indexers</h2></div>
+      <p class="hint card-intro">Newznab indexers Encore searches for albums and videos. Keys are kept on the server and never shown again.</p>
+      <div id="indexers" class="stack"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="addIndexer" style="margin-top:12px">Add an indexer</button>
+    </section>
+    <section class="card card-pad">
+      <h2 class="h2">SABnzbd</h2>
+      <p class="hint card-intro">Downloads go to their own <code>encore</code> category.</p>
+      <div id="sab"></div>
+    </section>
+    <section class="card card-pad">
+      <h2 class="h2">Plex</h2>
+      <p class="hint card-intro">Encore reads your library to see what you own, and asks Plex to scan each album it files. You sign in to Plex from the banner, not here.</p>
+      <div id="plex"></div>
+    </section>
+    <section class="card card-pad">
+      <h2 class="h2">Folders</h2>
+      <p class="hint card-intro">Paths as this server sees them.</p>
+      <div id="folders"></div>
+    </section>
+    <div class="row settings-save">
+      <button type="submit" class="btn btn-primary" id="save">Save</button>
+      <button type="button" class="btn btn-ghost" id="saveTest">Save and test</button>
+    </div>
+    <ul class="report" id="report" aria-live="polite"></ul>
+  </form>
+
+  <section class="card card-pad" id="password">
+    <h2 class="h2">Password</h2>
+    <div id="passwordBody"></div>
+  </section>
+
+  {% include "partials/design_card.html" %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='design/design-card.js') }}" defer></script>
+<script type="module" src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}
