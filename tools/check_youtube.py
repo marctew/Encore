@@ -163,6 +163,9 @@ def main():
     job = client.post("/api/queue/youtube", json={"album_id": ALBUM_ID}, headers=HEAD).get_json()
     job = wait(s.queue, job["id"])
     expect("owned album goes to import", job["state"] == "done" and job["where"] == "import", job["message"])
+    held = sorted(p.name for p in (imports / job["folder"]).iterdir()) if job.get("folder") else []
+    expect("held album is named like any download", job["folder"].startswith("Test Band - Can't Stop [")
+           and "01 - Come Together.m4a" in held and "cover.jpg" in held, (job["folder"], held))
     expect("AAC quality isn't shown as a CD's", "(M4A 1" in job["message"], job["message"])
     expect("existing videos skipped", "2 already there" in job["message"] and len(list((music / "Test Band").glob("*-video.mp4"))) == 2, job["message"])
 

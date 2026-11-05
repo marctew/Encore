@@ -429,7 +429,7 @@ class Queue:
         added, pairs = [], []
         try:
             for track in tracks:
-                target = source / f"youtube-{track['disc']}-{track['number']:03d}.m4a"
+                target = source / track_file(track, len({t["disc"] for t in edition["tracks"]}) > 1)
                 youtube_audio(videos[track["key"]], target, track_label(track), track.get("seconds"))
                 added.append(target)
                 pairs.append(({"path": target}, listed[(track["disc"], track["number"])]))
@@ -463,16 +463,18 @@ class Queue:
         videos = self.fetch_videos(job, tracks, folder)
         self.check_cancel(job)
         self.update(job, state="verifying", message="Checking every track.", step="", percent=100)
-        album_dir = folder / "album"
+        # Named like a Usenet download, because if the album is held it goes to the import folder as it is.
+        album_dir = folder / filing.safe(f"{job['artist']} - {job['title']} [{job['id']}]")
         shutil.rmtree(album_dir, ignore_errors=True)
         album_dir.mkdir(parents=True)
+        multi = len({t["disc"] for t in edition["tracks"]}) > 1
         pairs, off = [], 0
         for track in tracks:
             self.check_cancel(job)
             listed_track = listed[(track["disc"], track["number"])]
-            seconds = youtube_audio(videos[track["key"]], album_dir / f"{track['disc']}-{track['number']:03d}.m4a",
+            seconds = youtube_audio(videos[track["key"]], album_dir / track_file(listed_track, multi),
                                     track_label(track), track.get("seconds"))
-            pairs.append(({"path": album_dir / f"{track['disc']}-{track['number']:03d}.m4a"}, listed_track))
+            pairs.append(({"path": album_dir / track_file(listed_track, multi)}, listed_track))
             off += match.youtube_fit(listed_track["seconds"], seconds) == "off"
         linked = {(t["disc"], t["number"]) for t in tracks}
         gone = [t["title"] for t in edition["tracks"] if (t["disc"], t["number"]) not in linked]
@@ -732,6 +734,12 @@ def prepare_video(folder, job):
         raise JobFailed("The video file is damaged. Pick another.")
     job["quality"] = f"{stream.get('height') or '?'}p · {int(seconds) // 60}:{int(seconds) % 60:02d}"
     return main
+
+
+def track_file(track, multi):
+    """01 - Title.m4a (or 2-01 - Title.m4a on a multi-disc album), the way filing names tracks."""
+    prefix = f"{track['disc']}-" if multi else ""
+    return f"{prefix}{track['number']:02d} - {filing.safe(track['title'])[:120].rstrip('. ')}.m4a"
 
 
 def track_label(track):
