@@ -90,7 +90,9 @@ def album_key(name):
         previous = name
         name = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", name)
         name = re.sub(r"\s+320$", "", name).strip()
-    return norm(name)
+    # A title that's only a symbol (Ed Sheeran's + × ÷ = −) would normalise to nothing, and then every
+    # such album would look like the same one. They're keyed by their spoken name instead.
+    return norm(name) or norm(match.SPOKEN.get(name, name)) or name.casefold()
 
 
 class Library:
@@ -148,6 +150,8 @@ class Library:
 
     def find(self, artist, title):
         wanted = album_key(title)
+        if not wanted:
+            return None
         close = None
         for key, path, name in self.artists.get(norm(artist), []):
             if key == wanted:
@@ -812,7 +816,8 @@ class Owned:
 
     def find(self, album):
         held = self.by_artist.get(album.get("artist_id")) or self.by_artist.get(norm(album["artist"])) or {}
-        return held.get(album_key(album["title"]))
+        key = album_key(album["title"])
+        return held.get(key) if key else None
 
 
 

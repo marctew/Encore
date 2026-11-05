@@ -207,6 +207,14 @@ def main():
            and [p for _, p in reports] == sorted(p for _, p in reports) and reports[-1][1] <= 99, reports[-3:])
     server.filing.Progress.EVERY = 2
 
+    for name in ("× (2014)", "Play (2025)"):
+        (server.MUSIC / "Ed Sheeran" / name).mkdir(parents=True)
+    shelf = server.Library()
+    shelf.build()
+    expect("symbol albums aren't each other", [bool(shelf.find("Ed Sheeran", t)) for t in ("×", "−", "÷", "=", "+")] == [True] + [False] * 4)
+    expect("a symbol album still matches its own folder", shelf.find("Ed Sheeran", "×")["folder"] == "× (2014)")
+    server.shutil.rmtree(server.MUSIC / "Ed Sheeran")
+
     def enqueue(album):
         queue.jobs.append(None)
         queue.jobs.pop()
@@ -352,6 +360,14 @@ def main():
     expect("filing reports its progress", texts[0] == "Copying 1 of 4 files" and "Checking 4 of 4 copies" in texts
            and [p for _, p in reports] == sorted(p for _, p in reports) and reports[-1][1] <= 99, reports[-3:])
     server.filing.Progress.EVERY = 2
+
+    for name in ("× (2014)", "Play (2025)"):
+        (server.MUSIC / "Ed Sheeran" / name).mkdir(parents=True)
+    shelf = server.Library()
+    shelf.build()
+    expect("symbol albums aren't each other", [bool(shelf.find("Ed Sheeran", t)) for t in ("×", "−", "÷", "=", "+")] == [True] + [False] * 4)
+    expect("a symbol album still matches its own folder", shelf.find("Ed Sheeran", "×")["folder"] == "× (2014)")
+    server.shutil.rmtree(server.MUSIC / "Ed Sheeran")
     clip = root / "clip.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc=duration=25:size=640x360:rate=10",
                     "-f", "lavfi", "-i", "sine=duration=25", "-shortest", "-pix_fmt", "yuv420p", str(clip)], check=True)
