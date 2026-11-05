@@ -195,6 +195,18 @@ def main():
     expect("search leaves the key out of results", SECRET not in str(items))
     offer = items[0]
 
+    divide = {"title": "÷", "artist": "Ed Sheeran", "year": "2017", "seconds": 3400, "tracks_list": []}
+    expect("a symbol album is searched by its name too", "Ed Sheeran divide" in sources.spellings("Ed Sheeran", "÷"))
+    expect("a symbol album matches its spoken name", match.score(divide, {"title": "Ed_Sheeran-Divide-2017-FLAC", "size": 4 * 10**8})["tier"] != "no")
+    expect("a discography isn't the album", match.score(divide, {"title": "Ed Sheeran - Albums Flac", "size": 11 * 10**9})["tier"] == "no")
+    reports, copies = [], root / "copies"
+    server.filing.Progress.EVERY = 0
+    server.filing.copy_checked([(path, copies / path.name) for path in SOURCE], lambda text, percent: reports.append((text, percent)))
+    texts = [text for text, _ in reports]
+    expect("filing reports its progress", texts[0] == "Copying 1 of 4 files" and "Checking 4 of 4 copies" in texts
+           and [p for _, p in reports] == sorted(p for _, p in reports) and reports[-1][1] <= 99, reports[-3:])
+    server.filing.Progress.EVERY = 2
+
     def enqueue(album):
         queue.jobs.append(None)
         queue.jobs.pop()
@@ -328,6 +340,18 @@ def main():
 
     queue.jobs.clear()
     offer = items[0]
+
+    divide = {"title": "÷", "artist": "Ed Sheeran", "year": "2017", "seconds": 3400, "tracks_list": []}
+    expect("a symbol album is searched by its name too", "Ed Sheeran divide" in sources.spellings("Ed Sheeran", "÷"))
+    expect("a symbol album matches its spoken name", match.score(divide, {"title": "Ed_Sheeran-Divide-2017-FLAC", "size": 4 * 10**8})["tier"] != "no")
+    expect("a discography isn't the album", match.score(divide, {"title": "Ed Sheeran - Albums Flac", "size": 11 * 10**9})["tier"] == "no")
+    reports, copies = [], root / "copies"
+    server.filing.Progress.EVERY = 0
+    server.filing.copy_checked([(path, copies / path.name) for path in SOURCE], lambda text, percent: reports.append((text, percent)))
+    texts = [text for text, _ in reports]
+    expect("filing reports its progress", texts[0] == "Copying 1 of 4 files" and "Checking 4 of 4 copies" in texts
+           and [p for _, p in reports] == sorted(p for _, p in reports) and reports[-1][1] <= 99, reports[-3:])
+    server.filing.Progress.EVERY = 2
     clip = root / "clip.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc=duration=25:size=640x360:rate=10",
                     "-f", "lavfi", "-i", "sine=duration=25", "-shortest", "-pix_fmt", "yuv420p", str(clip)], check=True)

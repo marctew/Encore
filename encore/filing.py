@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import shutil
+import time
 import unicodedata
 from collections import Counter
 from pathlib import Path
@@ -91,20 +92,50 @@ def plan(source, music, library):
     return target, names
 
 
-def sha256(path):
+BLOCK = 4 << 20
+
+
+def sha256(path, moved=None):
     digest = hashlib.sha256()
     with open(path, "rb") as source:
-        while block := source.read(1 << 20):
+        while block := source.read(BLOCK):
             digest.update(block)
+            if moved:
+                moved(len(block))
     return digest.hexdigest()
 
 
-def copy_checked(pairs):
-    for source, target in pairs:
+class Progress:
+    """Reports a copy as it goes: copying counts once, checking reads both sides, so that counts twice.
+    report(text, percent) is called at most every EVERY seconds."""
+    EVERY = 2
+
+    def __init__(self, report, pairs):
+        self.report = report
+        self.total = max(1, sum(source.stat().st_size for source, _ in pairs) * 3)
+        self.done, self.shown = 0, 0.0
+
+    def moved(self, count, text):
+        self.done += count
+        if self.report and time.monotonic() - self.shown >= self.EVERY:
+            self.shown = time.monotonic()
+            self.report(text, round(min(99.0, self.done * 100 / self.total), 1))
+
+
+def copy_checked(pairs, report=None):
+    """Copies each file, then reads both sides back and compares, because the share can drop a write."""
+    progress = Progress(report, pairs)
+    count = len(pairs)
+    for place, (source, target) in enumerate(pairs, 1):
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-    for source, target in pairs:
-        if sha256(source) != sha256(target):
+        text = f"Copying {place} of {count} file{'' if count == 1 else 's'}"
+        with open(source, "rb") as reading, open(target, "wb") as writing:
+            while block := reading.read(BLOCK):
+                writing.write(block)
+                progress.moved(len(block), text)
+    for place, (source, target) in enumerate(pairs, 1):
+        text = f"Checking {place} of {count} cop{'y' if count == 1 else 'ies'}"
+        if sha256(source, lambda n: progress.moved(n, text)) != sha256(target, lambda n: progress.moved(n, text)):
             raise JobFailed(f"{source.name} changed while copying to the share.")
 
 
@@ -114,7 +145,7 @@ def open_up(folder):
         path.chmod(0o777 if path.is_dir() else 0o666)
 
 
-def to_library(source, target, names, music, job_id):
+def to_library(source, target, names, music, job_id, report=None):
     """Builds the album under a dot folder Plex can't see, then renames it into place."""
     temp = music / f".encore-incoming-{job_id}"
     pairs = [(path, temp / name) for path, name in names.items()]
@@ -124,7 +155,7 @@ def to_library(source, target, names, music, job_id):
             used.add(path.name.casefold())
             pairs.append((path, temp / path.name))
     try:
-        copy_checked(pairs)
+        copy_checked(pairs, report)
         open_up(temp)
         if not target.parent.exists():
             target.parent.mkdir()
@@ -165,11 +196,11 @@ def to_artist(source, artist, song, music, job_id, skip_existing=False):
     return f"{top}/{name}"
 
 
-def to_import(source, imports, job_id):
+def to_import(source, imports, job_id, report=None):
     temp = imports / f"_encore-incoming-{job_id}"
     pairs = [(p, temp / p.relative_to(source)) for p in source.rglob("*") if p.is_file() and p.suffix.lower() in KEPT]
     try:
-        copy_checked(pairs)
+        copy_checked(pairs, report)
         open_up(temp)
         name = safe(source.name)
         target, count = imports / name, 2

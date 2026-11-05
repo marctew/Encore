@@ -64,8 +64,15 @@ def locate(tokens, name):
     return span
 
 
+# Albums named with only a symbol (Ed Sheeran's + × ÷ = −) have no words to look for, and releases
+# usually spell them out, so the spoken name is looked for too.
+SPOKEN = {"+": "plus", "×": "multiply", "÷": "divide", "=": "equals", "−": "subtract", "-": "subtract", "–": "subtract"}
+
+
 def album_forms(title):
     forms = [title]
+    if not words(title) and title.strip() in SPOKEN:
+        forms.append(SPOKEN[title.strip()])
     short = re.split(r"\s*[:(\[]", title)[0].strip()
     if short and short != title and len(words(short)) >= 1:
         forms.append(short)

@@ -506,12 +506,14 @@ const isRunning = job => ['downloading', 'verifying', 'filing', 'scanning'].incl
 
 function jobCard(job) {
   const running = isRunning(job);
-  const percent = job.state === 'downloading' ? job.percent : 100;
+  const copying = job.state === 'filing' && job.step;
+  const percent = job.state === 'downloading' || copying ? job.percent : 100;
   let state = ['failed', 'done'].includes(job.state) ? job.message : stateText[job.state];
   if (job.state === 'downloading') {
     if (job.kind === 'youtube' || (job.step || '').startsWith('YouTube')) state = `${job.step || 'Downloading'} · ${Math.round(job.percent)}%`;
     else state = job.step ? `SABnzbd: ${job.step}` : `Downloading ${Math.round(job.percent)}%`;
   }
+  if (copying) state = `${stateText.filing}: ${job.step.toLowerCase()} · ${Math.round(job.percent)}%`;
   if (job.state === 'done' && job.quality) state += ` · ${job.quality}`;
   const buttons = [];
   if (job.state === 'failed') {

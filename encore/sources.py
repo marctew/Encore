@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .match import APOSTROPHES, words
+from .match import APOSTROPHES, SPOKEN, words
 
 log = logging.getLogger("encore")
 AGENT = "Encore/2.0 (self-hosted music library tool)"
@@ -288,6 +288,8 @@ def spellings(artist, title):
     text = re.sub(f"[{APOSTROPHES}]", "'", f"{artist} {title}")
     tidy = lambda value: " ".join(re.sub(r"[^\w\s']", " ", value, flags=re.UNICODE).split())
     forms = [" ".join(text.split()), tidy(text).replace("'", " "), " ".join(tidy(text).replace("'", "").split())]
+    if not words(title) and title.strip() in SPOKEN:        # "Ed Sheeran ÷" is searched as "Ed Sheeran Divide" too
+        forms.append(f"{tidy(artist)} {SPOKEN[title.strip()]}")
     return list(dict.fromkeys(forms))
 
 

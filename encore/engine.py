@@ -377,7 +377,7 @@ class Queue:
             self.check_cancel(job)
             self.update(job, state="verifying", message="Checking the video.")
             chosen = prepare_video(source, job)
-            self.update(job, state="filing", message="Filing the video.")
+            self.update(job, state="filing", message="Filing the video.", step="")
             self.update(job, where="library", folder=filing.to_artist(chosen, job["artist"], job["title"], MUSIC, job["id"]))
             return
         album = self.brainz.album(job["album_id"])
@@ -394,14 +394,19 @@ class Queue:
         filled = self.fill_gaps(job, source, album) if job.get("fill") and job.get("missing") else None
         try:
             self.check_cancel(job)
-            self.update(job, state="filing", message="Filing the album.")
-            self.update(job, **file_album(source, job["id"], self.library, hold))
+            self.update(job, state="filing", message="Filing the album.", step="")
+            self.update(job, **file_album(source, job["id"], self.library, hold, self.reporter(job)))
         except BaseException:
             for path in filled["added"] if filled else ():
                 path.unlink(missing_ok=True)           # or the next try would find tracks that aren't FLAC
             raise
         if filled:
             self.file_videos(job, album, filled["tracks"], filled["listed"], filled["videos"])
+
+    def reporter(self, job):
+        """How filing shows its progress: the step it's on, and how far through the copy it is."""
+        self.update(job, step="", percent=0)
+        return lambda text, percent: self.update(job, step=text, percent=percent)
 
     def fill_gaps(self, job, source, album):
         """Fetches a Usenet album's missing tracks from YouTube and adds them, tagged, beside the rest.
@@ -477,8 +482,8 @@ class Queue:
         job["quality"] = f"YouTube AAC {min(rates) // 1000}" if rates and min(rates) else "YouTube AAC"
         job["tracks"] = len(pairs)
         self.check_cancel(job)
-        self.update(job, state="filing", message="Filing the album.")
-        self.update(job, **file_album(album_dir, job["id"], self.library))
+        self.update(job, state="filing", message="Filing the album.", step="")
+        self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
         self.file_videos(job, album, tracks, listed, videos)
 
     def fetch_videos(self, job, tracks, folder, label="Track"):
@@ -775,15 +780,15 @@ def describe_quality(files):
     return f"{files[0].suffix[1:].upper()} {max(getattr(i, 'bitrate', 0) for i in infos) // 1000}"
 
 
-def file_album(source, job_id, library, hold=None):
+def file_album(source, job_id, library, hold=None, report=None):
     library.build()
     try:
         if hold:
             raise Hold(hold)
         target, names = filing.plan(source, MUSIC, library)
     except Hold as held:
-        return {"where": "import", "reason": str(held), "folder": filing.to_import(source, IMPORT, job_id)}
-    filing.to_library(source, target, names, MUSIC, job_id)
+        return {"where": "import", "reason": str(held), "folder": filing.to_import(source, IMPORT, job_id, report)}
+    filing.to_library(source, target, names, MUSIC, job_id, report)
     return {"where": "library", "album": filing.read_track(filing.audio_in(target)[0])["album"],
             "folder": target.relative_to(MUSIC).as_posix()}
 
