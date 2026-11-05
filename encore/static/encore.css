@@ -114,6 +114,36 @@
 .track-title { overflow-wrap: anywhere; }
 .disc { margin: 16px 0 4px; list-style: none; }
 
+/* Building an album from YouTube: the track on the left, its link and video on the right */
+.yt-intro { margin: 0 0 12px; }
+.yt-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; }
+.yt-bar .actions { margin-left: auto; }
+.yt-edition { width: auto; max-width: 100%; min-width: 0; flex: 0 1 320px; }
+.yt-tracks { margin: 0; padding: 0; list-style: none; }
+.yt-track { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; padding: 12px 0; border-top: 1px solid rgb(var(--border)); }
+.yt-left { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding-top: 8px; }
+.yt-left .num { text-align: right; font-variant-numeric: tabular-nums; }
+.yt-left small { display: block; font-size: 12px; }
+.yt-right { display: grid; gap: 8px; min-width: 0; }
+.yt-input-row { display: flex; align-items: center; gap: 4px; }
+.yt-input-row .input { flex: 1; min-width: 0; }
+.yt-status { padding-left: 2px; }
+.yt-video { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: start; text-align: left; }
+.yt-thumb { position: relative; display: grid; place-items: center; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-sm);
+  background: rgb(var(--surface-2)); color: rgb(var(--faint)); }
+.yt-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 200ms var(--ease); }
+.yt-thumb img.loaded { opacity: 1; }
+.yt-video-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.yt-video-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; color: rgb(var(--text)); }
+a.yt-video-title:hover { color: rgb(var(--accent)); }
+.yt-video .meta { gap: 6px; }
+.yt-video .note { margin-top: 0; }
+.yt-choices { padding: 8px 12px; border: 1px dashed rgb(var(--border)); border-radius: var(--r-md); }
+.yt-choices ul { margin: 4px 0 0; padding: 0; list-style: none; }
+.yt-choice { display: block; width: 100%; padding: 8px 4px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; font: inherit; cursor: pointer; }
+.yt-choice:hover, .yt-choice:focus-visible { background: rgb(var(--surface-2)); }
+.job-kind { margin-left: 8px; vertical-align: 1px; }
+
 /* ---------------------------------------------------------- the queue */
 .queue-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .queue-setting { margin: 12px 0 4px; }
@@ -180,6 +210,10 @@
   .detail { padding: 16px; }
   .detail-head { grid-template-columns: minmax(0, 1fr); }
   .detail-head .thumb { max-width: 220px; }
+  .yt-track { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .yt-left { padding-top: 0; }
+  .yt-input-row .input { font-size: 16px; }
+  .yt-bar .actions { margin-left: 0; }
   .queue-panel { padding: 12px; }
 }
 @media (pointer: coarse) { .btn-sm { min-height: 40px; } }

@@ -102,6 +102,22 @@ function renderPassword(on) {
       remove));
 }
 
+async function loadYoutube() {
+  const { version } = await api('/api/youtube');
+  const update = el('button', { type: 'button', class: 'btn btn-ghost btn-sm' }, 'Update yt-dlp');
+  update.onclick = () => busy(update, async () => {
+    update.textContent = 'Updating…';
+    try {
+      const result = await api('/api/youtube/update', { method: 'POST' });
+      toast(result.version === version ? 'yt-dlp is already up to date.' : `yt-dlp updated to ${result.version}.`);
+      await loadYoutube();
+    } finally { update.textContent = 'Update yt-dlp'; }
+  });
+  $('youtubeBody').replaceChildren(
+    el('span', { class: 'small muted tabular' }, version ? `yt-dlp ${version}` : "yt-dlp isn't installed. Run scripts/update.sh, or update it here."), update);
+}
+
 load().catch(error => toast(error.message, 'error'));
+loadYoutube().catch(error => toast(error.message, 'error'));
 refreshHealth();
 api('/api/queue').then(({ jobs }) => setCount('queue', jobs.filter(j => ['queued', 'downloading', 'verifying', 'filing', 'scanning'].includes(j.state)).length)).catch(() => {});

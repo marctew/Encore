@@ -136,8 +136,9 @@ def to_library(source, target, names, music, job_id):
         shutil.rmtree(temp, ignore_errors=True)
 
 
-def to_artist(source, artist, song, music, job_id):
-    """Files a music video in the artist's folder, named the way Plex looks for. Never overwrites."""
+def to_artist(source, artist, song, music, job_id, skip_existing=False):
+    """Files a music video in the artist's folder, named the way Plex looks for. Never overwrites:
+    with skip_existing, a video that's already there returns None instead of failing the job."""
     tops = {norm(d.name): d.name for d in os.scandir(music) if d.is_dir()}
     top = tops.get(norm(artist)) or safe(artist)
     name = safe(f"{song}-video{source.suffix.lower()}")
@@ -146,6 +147,8 @@ def to_artist(source, artist, song, music, job_id):
     if not top or not name:
         raise JobFailed("Its name can't be made into a file name.")
     if target.exists():
+        if skip_existing:
+            return None
         raise JobFailed(f"You already have {name}.")
     temp = music / f".encore-incoming-{job_id}"
     try:

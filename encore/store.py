@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS plex_albums (rating TEXT PRIMARY KEY, artist_rating T
 CREATE TABLE IF NOT EXISTS wanted (album_id TEXT PRIMARY KEY, artist_id TEXT, data TEXT, added REAL,
     searched_at REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS facts (name TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS youtube_drafts (album_id TEXT PRIMARY KEY, edition TEXT, links TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS youtube_videos (id TEXT PRIMARY KEY, data TEXT, saved_at REAL);
 """
 
 
@@ -145,3 +147,20 @@ class Store:
 
     def wanted_ids(self):
         return {r["album_id"] for r in self.rows("SELECT album_id FROM wanted")}
+
+    def youtube_draft(self, album_id):
+        """The links chosen so far for an album: {"edition": id, "links": {"disc-number": video id}}."""
+        row = self.one("SELECT edition, links FROM youtube_drafts WHERE album_id = ?", album_id)
+        return {"edition": row["edition"], "links": json.loads(row["links"])} if row else {"edition": "", "links": {}}
+
+    def save_youtube_draft(self, album_id, edition, links):
+        self.db.execute("INSERT OR REPLACE INTO youtube_drafts (album_id, edition, links, updated) VALUES (?, ?, ?, ?)",
+                        (album_id, edition, json.dumps(links), time.time()))
+
+    def youtube_video(self, video_id):
+        row = self.one("SELECT data, saved_at FROM youtube_videos WHERE id = ?", video_id)
+        return {"video": json.loads(row["data"]), "saved_at": row["saved_at"]} if row else None
+
+    def save_youtube_video(self, video):
+        self.db.execute("INSERT OR REPLACE INTO youtube_videos (id, data, saved_at) VALUES (?, ?, ?)",
+                        (video["id"], json.dumps(video), time.time()))

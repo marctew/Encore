@@ -40,6 +40,8 @@ PROGRAMS = (".exe", ".scr", ".bat", ".cmd", ".com", ".msi", ".ps1", ".vbs", ".js
 COMPILATION = {"various artists", "various", "va"}
 VIDEOS = (".mp4", ".mkv", ".avi", ".mpg", ".mpeg", ".vob", ".ts", ".m4v", ".mov", ".wmv")
 VIDEO_SECONDS = 20
+YOUTUBE_BYTES_PER_SECOND = 10**6        # 1080p H.264 runs about 0.4 MB a second; this leaves room
+YOUTUBE_SLACK = 2                       # seconds a download may differ from the length YouTube gave
 
 log = logging.getLogger("encore")
 
@@ -54,6 +56,10 @@ class Incomplete(JobFailed):
 
 class NotFlac(JobFailed):
     """The release said FLAC and wasn't, so the person can choose to keep it anyway."""
+
+
+class TrackFailed(JobFailed):
+    """One YouTube track failed. The others stay downloaded, so a retry only fetches what's missing."""
 
 
 def use_folders(settings):
@@ -134,7 +140,8 @@ class Library:
                 except Exception:
                     return None
                 bits = getattr(info, "bits_per_sample", 0)
-                if bits:
+                lossy = name.lower().endswith(".mp3") or getattr(info, "codec", "").startswith("mp4a")
+                if bits and not lossy:                    # AAC reports 16 bits too, so only lossless shows them
                     return f"{bits}/{info.sample_rate / 1000:g}"
                 return f"{Path(name).suffix[1:].upper()} {getattr(info, 'bitrate', 0) // 1000}"
         return None
@@ -164,8 +171,9 @@ class Queue:
     """One job at a time, in its own thread. The page's threads read and change the job list
     too, so every change to it, and every save, happens under `lock`."""
 
-    def __init__(self, indexers, sab, brainz, library, plex, store, on_filed=None):
+    def __init__(self, indexers, sab, brainz, library, plex, store, on_filed=None, youtube=None):
         self.store = store
+        self.youtube = youtube
         self.on_filed = on_filed
         self.indexers = indexers
         self.sab = sab
@@ -238,6 +246,18 @@ class Queue:
         self.wake.set()
         return job
 
+    def add_youtube(self, album, edition, tracks, partial):
+        """tracks: [{key, disc, number, title, video, seconds, channel}], the linked tracks of one edition."""
+        job = {key: album[key] for key in ("title", "artist", "year", "cover")}
+        job.update(album_id=album["id"], id=uuid.uuid4().hex[:12], kind="youtube", state="queued", percent=0,
+                   message="", step="", fix_artist=True, folder="", quality="", added=time.time(), partial=partial,
+                   tracks=len(tracks), source={"type": "youtube", "edition": edition, "tracks": tracks})
+        with self.lock:
+            self.jobs.append(job)
+            self.update()
+        self.wake.set()
+        return job
+
     def update(self, job=None, **changes):
         with self.lock:
             if job:
@@ -275,6 +295,8 @@ class Queue:
                 self.update(job, state="failed", message=str(error), can_partial=True, kept=True)
             except NotFlac as error:
                 self.update(job, state="failed", message=str(error), can_import=True, kept=True)
+            except TrackFailed as error:
+                self.update(job, state="failed", message=str(error), kept=True)
             except JobFailed as error:
                 self.update(job, state="failed", message=str(error))
             except Exception:
@@ -287,11 +309,13 @@ class Queue:
                 self.running = None
 
     def result(self, job, message):
-        notes = [job.get("partial_note"), job.get("edition_note")]
+        notes = [job.get("partial_note"), job.get("edition_note"), job.get("video_note")]
         return " ".join([message, *filter(None, notes)])
 
     def finish(self, job):
         self.store.unwant(job["album_id"])
+        if job["where"] == "import" and job.get("videos_filed") and self.plex.linked:
+            threading.Thread(target=self.scan_quietly, args=(job["videos_filed"][0].split("/")[0],), daemon=True).start()
         if job["where"] == "import":
             self.update(job, state="done", message=self.result(job, job["reason"]), finished=time.time())
         elif self.plex.linked:
@@ -300,6 +324,12 @@ class Queue:
         else:
             self.update(job, state="done", finished=time.time(),
                         message=self.result(job, "In your library. Connect Plex so it scans by itself."))
+
+    def scan_quietly(self, folder):
+        try:
+            self.plex.scan(folder)
+        except Exception as error:
+            log.warning("Plex scan failed: %s", type(error).__name__)
 
     def video_in_plex(self, job):
         self.plex.scan(job["folder"].split("/")[0])
@@ -313,7 +343,8 @@ class Queue:
             if job.get("kind") == "video":
                 shown = self.video_in_plex(job)
             else:
-                self.plex.scan(job["folder"])
+                # A YouTube album's videos sit in the artist folder, so that's what Plex scans.
+                self.plex.scan(job["folder"].split("/")[0] if job.get("kind") == "youtube" else job["folder"])
                 shown = self.plex.confirm(job["artist"], job["folder"], job["tracks"])
             message = "In your library and Plex." if shown else "In your library, but Plex hasn't shown it yet."
         except Exception as error:
@@ -333,9 +364,11 @@ class Queue:
     def process_job(self, job):
         with self.lock:
             job["kept"] = False
-            for key in ("partial_note", "edition_note", "can_partial", "can_import"):
+            for key in ("partial_note", "edition_note", "video_note", "videos_filed", "can_partial", "can_import"):
                 job.pop(key, None)
         self.update(job, state="downloading", message="")
+        if job.get("kind") == "youtube":
+            return self.process_youtube(job)
         if job.get("kind") == "video":
             source = self.download(job)
             self.check_cancel(job)
@@ -357,6 +390,99 @@ class Queue:
         self.check_cancel(job)
         self.update(job, state="filing", message="Filing the album.")
         self.update(job, **file_album(source, job["id"], self.library, hold))
+
+    def process_youtube(self, job):
+        album = self.brainz.album(job["album_id"])
+        edition = next((e for e in album["editions"] if e["id"] == job["source"]["edition"]), None)
+        if not edition:
+            raise JobFailed("That edition has gone from MusicBrainz. Open the album and build it again.")
+        listed = {(t["disc"], t["number"]): t for t in edition["tracks"]}
+        tracks = job["source"]["tracks"]
+        if any((t["disc"], t["number"]) not in listed for t in tracks):
+            raise JobFailed("The track list has changed on MusicBrainz. Open the album and build it again.")
+        folder = DOWNLOADS / "encore-youtube" / job["id"]
+        make_folder(DOWNLOADS)
+        need = sum(t.get("seconds") or 300 for t in tracks) * YOUTUBE_BYTES_PER_SECOND
+        if shutil.disk_usage(DOWNLOADS).free < need * 2 + MIN_FREE:
+            raise JobFailed("Not enough free space on the share for this album.")
+        self.update(job, storage=str(folder))
+        videos = self.fetch_videos(job, tracks, folder)
+        self.check_cancel(job)
+        self.update(job, state="verifying", message="Checking every track.", step="", percent=100)
+        album_dir = folder / "album"
+        shutil.rmtree(album_dir, ignore_errors=True)
+        album_dir.mkdir(parents=True)
+        pairs, off = [], 0
+        for track in tracks:
+            self.check_cancel(job)
+            listed_track = listed[(track["disc"], track["number"])]
+            seconds = youtube_audio(videos[track["key"]], album_dir / f"{track['disc']}-{track['number']:03d}.m4a",
+                                    track_label(track), track.get("seconds"))
+            pairs.append(({"path": album_dir / f"{track['disc']}-{track['number']:03d}.m4a"}, listed_track))
+            off += match.youtube_fit(listed_track["seconds"], seconds) == "off"
+        linked = {(t["disc"], t["number"]) for t in tracks}
+        gone = [t["title"] for t in edition["tracks"] if (t["disc"], t["number"]) not in linked]
+        if gone:
+            job["partial_note"] = f"Missing {and_more(gone)}."
+        if off:
+            job["edition_note"] = f"{count(off)} differ{'s' if off == 1 else ''} in length from the album."
+        write_tags(pairs, album, edition, True)
+        add_cover(self.brainz.web, album["id"], album_dir, [item["path"] for item, _ in pairs])
+        rates = [getattr(mutagen.File(item["path"]).info, "bitrate", 0) for item, _ in pairs]
+        job["quality"] = f"YouTube AAC {min(rates) // 1000}" if rates and min(rates) else "YouTube AAC"
+        job["tracks"] = len(pairs)
+        self.check_cancel(job)
+        self.update(job, state="filing", message="Filing the album.")
+        self.update(job, **file_album(album_dir, job["id"], self.library))
+        self.file_videos(job, album, tracks, listed, videos)
+
+    def fetch_videos(self, job, tracks, folder):
+        """Downloads each track's video, skipping any already here from an earlier try."""
+        videos = {}
+        for place, track in enumerate(tracks):
+            self.check_cancel(job)
+            share = 100 / len(tracks)
+            self.update(job, step=f"Track {place + 1} of {len(tracks)}", percent=round(place * share, 1))
+            path = folder / f"{track['video']}.mp4"
+            if not path.exists():
+                shown = [0.0]
+
+                def progress(value, base=place * share):
+                    overall = round(base + value * share / 100, 1)
+                    if overall - shown[0] >= 1:
+                        shown[0] = overall
+                        self.update(job, percent=overall)
+
+                try:
+                    path = self.youtube.download(track["video"], folder, progress, lambda: job.get("cancel"))
+                except SourceError as error:
+                    raise TrackFailed(f"{track_label(track)}: {error}. Change its link and retry.") from None
+                if path is None:
+                    self.check_cancel(job)
+                    raise Cancelled
+            videos[track["key"]] = path
+        return videos
+
+    def file_videos(self, job, album, tracks, listed, videos):
+        """Each track's video goes in the artist folder, unless it was only the album audio over a still."""
+        filed, there, still = [], 0, 0
+        compilation = norm(album["artist"]) in COMPILATION
+        for track in tracks:
+            if match.audio_only(track.get("channel")):
+                still += 1
+                continue
+            listed_track = listed[(track["disc"], track["number"])]
+            artist = (listed_track["artist"] or album["artist"]) if compilation else album["artist"]
+            where = filing.to_artist(videos[track["key"]], artist, listed_track["title"], MUSIC, job["id"], skip_existing=True)
+            if where:
+                filed.append(where)
+            else:
+                there += 1
+        parts = [f"{len(filed)} video{'' if len(filed) == 1 else 's'} filed" if filed else "",
+                 f"{there} already there" if there else "",
+                 f"{still} audio only" if still else ""]
+        note = ", ".join(p for p in parts if p)
+        self.update(job, videos_filed=filed, video_note=f"{note[0].upper()}{note[1:]}." if note else "")
 
     def download(self, job):
         size = job["source"]["size"]
@@ -548,6 +674,48 @@ def prepare_video(folder, job):
         raise JobFailed("The video file is damaged. Pick another.")
     job["quality"] = f"{stream.get('height') or '?'}p · {int(seconds) // 60}:{int(seconds) % 60:02d}"
     return main
+
+
+def track_label(track):
+    where = f"Disc {track['disc']} track {track['number']}" if track["disc"] > 1 else f"Track {track['number']}"
+    return f"{where} (“{track['title']}”)"
+
+
+def youtube_audio(video, target, label, expected):
+    """Checks a downloaded video reads through to the end, then copies its sound out as the album's track.
+    YouTube's sound is AAC, which goes in an .m4a as it is; anything else is converted once."""
+    info = probe(video)
+    sound = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
+    seconds = float((info.get("format") or {}).get("duration") or 0)
+    read = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(video), "-map", "0", "-c", "copy", "-f", "null", "-"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not sound or not seconds or read.returncode != 0 or (expected and abs(seconds - expected) > YOUTUBE_SLACK):
+        video.unlink(missing_ok=True)
+        raise TrackFailed(f"{label}: the download was damaged or cut short. Retry to fetch it again.")
+    codec = ["-c:a", "copy"] if sound.get("codec_name") == "aac" else ["-c:a", "aac", "-b:a", "192k"]
+    made = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(video), "-map", "0:a:0", "-vn", *codec,
+                           "-movflags", "+faststart", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if made.returncode != 0 or not decode_ok(target):
+        raise JobFailed(f"{label}: Encore couldn't take the sound out of the video.")
+    return seconds
+
+
+def add_cover(web, album_id, folder, files):
+    """The front cover from the Cover Art Archive, as cover.jpg and inside each track. Optional."""
+    from mutagen.mp4 import MP4, MP4Cover
+    from .sources import cover
+    try:
+        response = web.get(cover(album_id, 1200))
+        if response.status_code != 200 or not response.content.startswith(b"\xff\xd8"):
+            return
+    except Exception as error:
+        log.warning("Cover fetch failed: %s", type(error).__name__)
+        return
+    (folder / "cover.jpg").write_bytes(response.content)
+    for path in files:
+        audio = MP4(path)
+        audio["covr"] = [MP4Cover(response.content, imageformat=MP4Cover.FORMAT_JPEG)]
+        audio.save()
 
 
 def describe_quality(files):

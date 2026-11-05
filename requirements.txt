@@ -2,3 +2,5 @@ Flask>=3.0
 gunicorn>=23
 mutagen==1.48.1
 requests>=2.32
+yt-dlp[default]
+deno

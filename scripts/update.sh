@@ -53,6 +53,11 @@ if [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ]; then
     echo "$WANT" | as_owner tee "$STAMP" >/dev/null
 fi
 
+# yt-dlp has to keep up with YouTube, which breaks old versions every few weeks, so it's upgraded on
+# every deploy rather than only when requirements.txt changes. A failure here doesn't stop the deploy.
+as_owner venv/bin/pip install -q -U "yt-dlp[default]" deno \
+    || echo "Couldn't update yt-dlp; carrying on with the one installed." >&2
+
 as_owner venv/bin/python -m compileall -q encore wsgi.py >/dev/null \
     || { echo "The code doesn't compile; not restarting." >&2; exit 1; }
 

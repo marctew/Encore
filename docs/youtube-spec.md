@@ -2,7 +2,7 @@
 
 Build an album from YouTube links when Usenet doesn't have it. One link per track: Encore downloads each video once, takes the audio out of it without re-encoding to make the album, and files the videos as the artist's music videos.
 
-Status: agreed design, not built. Read `README.md`, `CLAUDE.md`, `docs/design/APP-STANDARD.md` and `docs/design/DESIGN-SPEC.md` first. The rules in `CLAUDE.md` (X-Encore header, password guard, data in `/var/lib/encore`, never editing the vendored design files) apply to everything here.
+Status: built. The code differs from this spec in a few places: the client is in `encore/youtube.py`; links are set one track at a time (`POST /api/album/<id>/youtube/link`) rather than as a whole draft; downloads run outside the lookup lock; and Topic-channel uploads file no video. Read `README.md`, `CLAUDE.md`, `docs/design/APP-STANDARD.md` and `docs/design/DESIGN-SPEC.md` first. The rules in `CLAUDE.md` (X-Encore header, password guard, data in `/var/lib/encore`, never editing the vendored design files) apply to everything here.
 
 ## Decisions
 

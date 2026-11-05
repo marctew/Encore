@@ -22,6 +22,7 @@ from .filing import norm
 from .plex import Plex
 from .sources import Deezer, Indexers, MusicBrainz, Sabnzbd, Settings, SourceError, Web
 from .store import Store
+from .youtube import YouTube, youtube_id
 
 PLEX_SYNC = 3600
 PHOTO_RETRY = 30 * 86400
@@ -530,6 +531,140 @@ def add_job():
     return jsonify(public(s.queue.add(album, offer, bool(data.get("fix_artist")), chose_other)))
 
 
+# ---------------------------------------------------------------- YouTube albums
+
+def editions_of(details):
+    """Editions with different track lists, main one first. Many releases share a track list, so
+    only the earliest of each is kept, or a big album would offer hundreds of the same choice."""
+    seen, found = set(), []
+    main = details["tracks_list"]
+    ordered = sorted(details["editions"], key=lambda e: (e["tracks"] != main, e["date"] or "9999"))
+    for edition in ordered:
+        shape = tuple((t["disc"], t["number"], norm(t["title"])) for t in edition["tracks"])
+        if shape in seen:
+            continue
+        seen.add(shape)
+        discs = len({t["disc"] for t in edition["tracks"]})
+        parts = [f"{len(edition['tracks'])} tracks", f"{discs} discs" if discs > 1 else "",
+                 (edition["date"] or "")[:4], edition["title"] if norm(edition["title"]) != norm(details["title"]) else "",
+                 edition["label"]]
+        found.append({**edition, "label_text": " · ".join(p for p in parts if p)})
+    return found
+
+
+def track_key(track):
+    return f"{track['disc']}-{track['number']}"
+
+
+def youtube_row(s, details, track, video_id):
+    cached = s.store.youtube_video(video_id) if video_id else None
+    video = cached["video"] if cached else None
+    if video:
+        video = {**video, **match.score_youtube(track, details["artist"], video),
+                 "audio_only": match.audio_only(video["channel"])}
+    return {**track, "key": track_key(track), "video": video}
+
+
+def builder(s, details):
+    draft = s.store.youtube_draft(details["id"])
+    editions = editions_of(details)
+    edition = next((e for e in editions if e["id"] == draft["edition"]), editions[0])
+    rows = [youtube_row(s, details, t, draft["links"].get(track_key(t))) for t in edition["tracks"]]
+    return {"edition": edition["id"], "editions": [{"id": e["id"], "label": e["label_text"]} for e in editions],
+            "discs": len({t["disc"] for t in edition["tracks"]}), "tracks": rows}
+
+
+def youtube_track(s, album, key):
+    details = s.brainz.album(checked_id(album))
+    built = builder(s, details)
+    row = next((r for r in built["tracks"] if r["key"] == key), None)
+    if not row:
+        raise Refusal(404, "That track isn't on this edition")
+    return details, row
+
+
+@bp.get("/api/album/<album>/youtube")
+def youtube_builder(album):
+    s = svc()
+    return jsonify(builder(s, s.brainz.album(checked_id(album))))
+
+
+@bp.post("/api/album/<album>/youtube/edition")
+def youtube_edition(album):
+    s = svc()
+    details = s.brainz.album(checked_id(album))
+    edition = str(body().get("edition", ""))
+    if edition not in {e["id"] for e in details["editions"]}:
+        raise Refusal(400, "That isn't an edition of this album")
+    s.store.save_youtube_draft(album, edition, s.store.youtube_draft(album)["links"])
+    return jsonify(builder(s, details))
+
+
+@bp.post("/api/album/<album>/youtube/link")
+def youtube_link(album):
+    """Sets one track's video from a pasted link (or clears it when blank), and saves the draft."""
+    s, data = svc(), body()
+    details, row = youtube_track(s, album, str(data.get("key", "")))
+    text = str(data.get("url", "")).strip()
+    video_id = youtube_id(text) if text else None
+    if text and not video_id:
+        raise Refusal(400, "That isn't a YouTube video link")
+    if video_id:
+        s.youtube.lookup(video_id)
+    draft = s.store.youtube_draft(album)
+    links = {**draft["links"], row["key"]: video_id} if video_id else {k: v for k, v in draft["links"].items() if k != row["key"]}
+    s.store.save_youtube_draft(album, draft["edition"] or builder(s, details)["edition"], links)
+    return jsonify(youtube_row(s, details, row, video_id))
+
+
+@bp.post("/api/album/<album>/youtube/find")
+def youtube_find(album):
+    s = svc()
+    details, row = youtube_track(s, album, str(body().get("key", "")))
+    found = s.youtube.search(f"{row['artist'] or details['artist']} {row['title']}")
+    for video in found:
+        s.store.save_youtube_video(video)
+    rows = [{**v, **match.score_youtube(row, details["artist"], v), "audio_only": match.audio_only(v["channel"])} for v in found]
+    rows.sort(key=lambda v: -v["score"])
+    return jsonify(results=rows[:5])
+
+
+def linked_tracks(s, details, partial):
+    built = builder(s, details)
+    linked = [r for r in built["tracks"] if r["video"]]
+    if not linked:
+        raise Refusal(409, "Add a link for at least one track first")
+    if len(linked) < len(built["tracks"]) and not partial:
+        raise Refusal(409, "Some tracks have no link yet")
+    tracks = [{"key": r["key"], "disc": r["disc"], "number": r["number"], "title": r["title"], "video": r["video"]["id"],
+               "seconds": r["video"]["seconds"], "channel": r["video"]["channel"]} for r in linked]
+    return built["edition"], tracks
+
+
+@bp.post("/api/queue/youtube")
+def add_youtube_job():
+    data, s = body(), svc()
+    album_id = checked_id(str(data.get("album_id", "")))
+    if not folders_ready():
+        raise Refusal(409, "Set your folders in Settings first")
+    with s.queue.lock:
+        if any(j["album_id"] == album_id and j["state"] in ACTIVE for j in s.queue.jobs):
+            raise Refusal(409, "Already queued")
+    details = s.brainz.album(album_id)
+    edition, tracks = linked_tracks(s, details, bool(data.get("partial")))
+    return jsonify(public(s.queue.add_youtube(details, edition, tracks, len(tracks) < len(builder(s, details)["tracks"]))))
+
+
+@bp.get("/api/youtube")
+def youtube_status():
+    return jsonify(version=svc().youtube.version())
+
+
+@bp.post("/api/youtube/update")
+def youtube_update():
+    return jsonify(version=svc().youtube.update())
+
+
 def find_job(job_id):
     job = svc().queue.get(job_id)
     if not job:
@@ -542,7 +677,15 @@ def retry(job_id, partial=False, keep_format=False):
     job = find_job(job_id)
     if job["state"] != "failed":
         raise Refusal(409, "Only failed albums can be retried")
-    if keep_format:
+    if job.get("kind") == "youtube":
+        # Picks up any links changed since it failed. Videos already downloaded stay for the next try.
+        s = svc()
+        details = s.brainz.album(job["album_id"])
+        edition, tracks = linked_tracks(s, details, True)
+        with queue.lock:
+            job["source"] = {"type": "youtube", "edition": edition, "tracks": tracks}
+            job["tracks"] = len(tracks)
+    elif keep_format:
         job["any_format"] = True
     elif not partial:
         queue.forget(job)
@@ -697,11 +840,11 @@ def about():
                             "the Plex sign-in and artist photos.").format(DATA),
         "built_with": ["Flask, SQLite and gunicorn",
                        "MusicBrainz for artists, albums and track lists",
-                       "Newznab indexers and SABnzbd for downloads",
+                       "Newznab indexers and SABnzbd for downloads, and yt-dlp for YouTube",
                        "mutagen for checking and tagging files",
                        "Plex for what you own, and Deezer for artist photos",
                        "Design Uniformity for the look"],
-        "footnote": "Not affiliated with Plex, MusicBrainz, Deezer or SABnzbd.",
+        "footnote": "Not affiliated with Plex, MusicBrainz, Deezer, SABnzbd or YouTube.",
     }
     return page("about.html", view="about", about=info)
 
@@ -749,7 +892,7 @@ def create_app():
     plex = Plex(DATA / "plex.json", settings)
     s = SimpleNamespace(web=web, settings=settings, store=store, plex=plex, auth=Auth(DATA / "auth.json"),
                         owned=Owned(), filling=deque(), fill=threading.Event(), deezer=Deezer(web),
-                        brainz=MusicBrainz(web, store), indexers=Indexers(settings, web),
+                        brainz=MusicBrainz(web, store), indexers=Indexers(settings, web), youtube=YouTube(store),
                         sab=Sabnzbd(settings, web), library=Library(), started=False)
 
     def filed():
@@ -758,7 +901,7 @@ def create_app():
         except Exception as error:
             log.warning("Plex sync failed: %s", type(error).__name__)
 
-    s.queue = Queue(s.indexers, s.sab, s.brainz, s.library, s.plex, s.store, filed)
+    s.queue = Queue(s.indexers, s.sab, s.brainz, s.library, s.plex, s.store, filed, s.youtube)
     s.owned.load(store)
     app.extensions["encore"] = s
     app.register_blueprint(bp)

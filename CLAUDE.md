@@ -6,7 +6,7 @@ Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md
 
 ## Layout
 
-- `encore/` the Flask package. `web.py` has the app factory (`create_app`), the routes and the guard; `engine.py` the queue and filing; `sources.py` the MusicBrainz, indexer, SABnzbd and Deezer clients; `plex.py`, `store.py` (SQLite), `match.py`, `filing.py`, `auth.py`.
+- `encore/` the Flask package. `web.py` has the app factory (`create_app`), the routes and the guard; `engine.py` the queue and filing; `sources.py` the MusicBrainz, indexer, SABnzbd and Deezer clients; `youtube.py` yt-dlp, run as its own program; `plex.py`, `store.py` (SQLite), `match.py`, `filing.py`, `auth.py`.
 - `encore/templates/` the pages; `encore/static/` the page scripts: `shell.js` (shared), `encore.js` (Find, Library, Wanted, Queue and artist pages as views of one page, each with its own URL) and `settings.js`.
 - `wsgi.py` serves it under gunicorn (one worker: the queue runs in-process); `python -m encore` runs it alone for development.
 - `scripts/update.sh` deploys a checkout; `install.sh` and `deploy/encore.service` set up a new machine.
@@ -22,4 +22,4 @@ Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md
 
 ## Tests
 
-`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes) and `tools/check_auth.py` (the password and the guard) print PASS lines and exit non-zero on a failure. Run both with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.
+`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes), `tools/check_youtube.py` (YouTube albums against a fake yt-dlp, `tools/fake_ytdlp.py`) and `tools/check_auth.py` (the password and the guard) print PASS lines and exit non-zero on a failure. Run all three with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.

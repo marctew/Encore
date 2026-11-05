@@ -46,13 +46,19 @@ def main():
     expect("stays signed in after turning on", client.get("/api/queue").status_code == 200)
 
     client.delete_cookie(server.COOKIE)
-    for path in ("/api/queue", "/api/settings", "/api/status", "/api/library", "/api/plex/thumb/1"):
+    album = "/api/album/22222222-2222-2222-2222-222222222222"
+    for path in ("/api/queue", "/api/settings", "/api/status", "/api/library", "/api/plex/thumb/1", "/api/youtube", f"{album}/youtube"):
         status = client.get(path).status_code
         expect(f"blocked {path}", status == 401, status)
     response = client.get("/")
     expect("page goes to login", response.status_code == 302 and response.headers["Location"] == "/login")
     status, _ = post(client, "/api/settings/test")
     expect("posts blocked", status == 401)
+    for path in ("/api/youtube/update", "/api/queue/youtube", f"{album}/youtube/link", f"{album}/youtube/find", f"{album}/youtube/edition"):
+        status, _ = post(client, path, {"album_id": album[-36:], "key": "1-1", "url": "aaaaaaaaaa1"})
+        expect(f"blocked POST {path}", status == 401, status)
+        status, _ = post(client, path, {}, headers={})
+        expect(f"POST {path} needs the page's header", status == 403, status)
     status, _ = post(client, "/api/password", {"new": "taken over 123"})
     expect("password can't be changed signed out", status == 401)
     response = client.get("/login")

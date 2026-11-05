@@ -172,9 +172,14 @@ function downloadsBlock(album) {
   return el('section', { class: 'detail-section' }, head, ...parts);
 }
 
-function renderDetail() {
+function renderDetail(force = false) {
   if (!detail) return;
+  // The builder keeps its own rows, so the queue's refresh doesn't wipe a link half typed.
+  if (detail.view === 'youtube' && !force && $('detail').querySelector('.yt-builder')) return refreshYoutubeBar();
   const album = detail.data || detail.summary;
+  const switchView = detail.view === 'youtube'
+    ? btn('Back to downloads', () => showAlbumView(album))
+    : btn('Build from YouTube', () => openYoutube(album));
   const facts = [album.released || album.year, album.label, album.kind, album.discs > 1 ? plural(album.discs, 'disc') : ''].filter(Boolean).join(' · ');
   const summary = album.tracks ? `${plural(album.tracks, 'track')} · ${album.minutes} min` : '';
   const body = [el('div', { class: 'detail-head' },
@@ -187,21 +192,23 @@ function renderDetail() {
       album.editions > 1 ? el('div', { class: 'small muted' }, `${album.editions} editions are known, and a download can fit any of them.`) : null,
       ownedNote(album),
       el('div', { class: 'row actions' }, wantButton(album),
-        album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true)) : null),
+        detail.data && !detail.error ? switchView : null,
+        album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true, detail.view)) : null),
       album.saved_at ? el('div', { class: 'small faint' }, `Saved ${ago(album.saved_at)}`) : null))];
   if (detail.error) body.push(note(detail.error, 'bad'));
   else if (!detail.data) body.push(note('Loading tracks…'));
+  else if (detail.view === 'youtube') body.push(youtubeBlock(album));
   else body.push(downloadsBlock(album), trackRows(album));
   $('detail').replaceChildren(
     el('button', { type: 'button', class: 'btn-icon dialog-close', 'aria-label': 'Close', title: 'Close', onclick: () => $('detail').close() }, glyph('x', 'icon')),
     el('div', { class: 'detail' }, ...body));
 }
 
-async function openAlbum(album, refresh = false) {
-  detail = { summary: album };
+async function openAlbum(album, refresh = false, startIn = 'album') {
+  detail = { summary: album, view: startIn };
   confirming = null;
   const opened = detail;
-  renderDetail();
+  renderDetail(true);
   if (!$('detail').open) $('detail').showModal();
   $('detail').scrollTop = 0;
   try {
@@ -209,14 +216,225 @@ async function openAlbum(album, refresh = false) {
   } catch (error) {
     opened.error = error.message;
   }
-  if (detail === opened) renderDetail();
+  if (detail === opened) renderDetail(true);
   if (opened.error) return;
+  if (opened.view === 'youtube') return loadYoutube(opened.data);
+  await loadDownloads(opened, album);
+}
+
+async function loadDownloads(opened, album) {
+  opened.downloadsAsked = true;
   try {
     opened.downloads = await api(`/api/album/${album.id}/downloads`);
   } catch (error) {
     opened.downloadError = error.message;
   }
-  if (detail === opened) renderDetail();
+  if (detail === opened) renderDetail(true);
+}
+
+function showAlbumView(album) {
+  detail.view = 'album';
+  detail.filling = false;
+  renderDetail(true);
+  if (!detail.downloadsAsked) loadDownloads(detail, album);
+}
+
+// ------------------------------------------------------------------ an album from YouTube links
+// One link per track. The page only ever changes one row at a time, and saves each link as it goes.
+
+const watchUrl = id => `https://youtu.be/${id}`;
+const FIT = { good: ['badge-success', 'Good fit'], close: ['badge-warning', 'Length differs'], off: ['badge-danger', 'Very different'] };
+
+function openYoutube(album) {
+  Object.assign(detail, { view: 'youtube', yt: null, ytError: null, ytBusy: {}, ytErrors: {}, ytTyped: {}, found: {}, filling: false });
+  renderDetail(true);
+  loadYoutube(album);
+}
+
+async function loadYoutube(album) {
+  const opened = detail;
+  Object.assign(opened, { ytBusy: opened.ytBusy || {}, ytErrors: opened.ytErrors || {}, ytTyped: opened.ytTyped || {}, found: opened.found || {} });
+  try { opened.yt = await api(`/api/album/${album.id}/youtube`); } catch (error) { opened.ytError = error.message; }
+  if (detail === opened) renderDetail(true);
+}
+
+function videoFacts(video) {
+  const fit = FIT[video.fit];
+  return el('div', { class: 'row meta' },
+    fit ? el('span', { class: fit[0] }, fit[1]) : null,
+    video.audio_only ? el('span', { class: 'badge-muted' }, 'Audio only') : null,
+    el('span', { class: 'small muted' }, [video.channel, video.seconds ? clock(video.seconds) : ''].filter(Boolean).join(' · ')));
+}
+
+function videoCard(video, linked) {
+  const name = linked
+    ? el('a', { class: 'yt-video-title', href: watchUrl(video.id), target: '_blank', rel: 'noopener noreferrer' }, video.title)
+    : el('div', { class: 'yt-video-title' }, video.title);
+  const notes = (video.notes || []).filter(text => !text.startsWith('Audio only'));
+  return el('div', { class: 'yt-video' },
+    picture(video.thumb, 'yt-thumb', glyph('film', 'icon')),
+    el('div', { class: 'yt-video-body' }, name, videoFacts(video),
+      notes.length ? el('div', { class: 'note' }, notes.join('. ') + '.') : null));
+}
+
+function youtubeRow(album, track) {
+  const key = track.key, working = detail.ytBusy[key], found = detail.found[key];
+  const current = track.video ? watchUrl(track.video.id) : '';
+  // A link that was refused stays in the box beside its reason, so it can be fixed.
+  const input = el('input', { class: 'input yt-url', type: 'url', inputmode: 'url', placeholder: 'Paste a YouTube link',
+    value: detail.ytTyped[key] ?? current, disabled: working || undefined, 'aria-label': `YouTube link for ${track.title}` });
+  // Enter, paste and leaving the box can all fire for one link; only the first sends it.
+  let sent = false;
+  const commit = () => {
+    if (sent || input.value.trim() === current) return;
+    sent = true;
+    setLink(album, key, input.value.trim());
+  };
+  input.onchange = commit;
+  input.onpaste = () => setTimeout(commit, 0);
+  input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } };
+  const find = el('button', { type: 'button', class: 'btn-icon', title: 'Find on YouTube', 'aria-label': `Find ${track.title} on YouTube`,
+    disabled: working || found === 'loading' || undefined, onclick: () => findOnYoutube(album, key) }, glyph('search', 'icon-sm'));
+  const clear = track.video ? el('button', { type: 'button', class: 'btn-icon', title: 'Remove link', 'aria-label': `Remove the link for ${track.title}`,
+    disabled: working || undefined, onclick: () => setLink(album, key, '') }, glyph('x', 'icon-sm')) : null;
+  let choices = null;
+  if (found === 'loading') choices = el('div', { class: 'small muted yt-status' }, 'Searching YouTube…');
+  else if (found) {
+    choices = el('div', { class: 'yt-choices' },
+      el('div', { class: 'row-between' }, el('span', { class: 'eyebrow' }, found.length ? 'Pick one' : 'Nothing found'),
+        btn('Close', () => { delete detail.found[key]; updateRow(album, key); })),
+      el('ul', { class: 'divide' }, ...found.map(video => el('li', {},
+        el('button', { type: 'button', class: 'yt-choice', onclick: () => setLink(album, key, video.id) }, videoCard(video, false))))));
+  }
+  const guest = track.artist && track.artist !== album.artist ? el('small', { class: 'muted' }, track.artist) : null;
+  return el('li', { class: 'yt-track', 'data-key': key },
+    el('div', { class: 'yt-left' },
+      el('span', { class: 'num muted' }, track.number),
+      el('span', { class: 'track-title' }, track.title, guest),
+      el('span', { class: 'time muted tabular' }, track.seconds ? clock(track.seconds) : '')),
+    el('div', { class: 'yt-right' },
+      el('div', { class: 'yt-input-row' }, input, find, clear),
+      working ? el('div', { class: 'small muted yt-status' }, 'Looking it up…') : null,
+      track.video && !working ? videoCard(track.video, true) : null,
+      detail.ytErrors[key] ? el('div', { class: 'why' }, `${detail.ytErrors[key]}.`.replace(/\.\.$/, '.')) : null,
+      choices));
+}
+
+function youtubeBar(album) {
+  const yt = detail.yt, linked = yt.tracks.filter(t => t.video).length, job = activeJob(album.id);
+  const edition = yt.editions.length > 1 ? el('select', { class: 'input yt-edition', 'aria-label': 'Edition' },
+    ...yt.editions.map(e => el('option', { value: e.id, selected: e.id === yt.edition || undefined }, e.label))) : null;
+  if (edition) edition.onchange = () => changeEdition(album, edition.value, edition);
+  const fill = btn(detail.filling ? 'Stop' : 'Fill all', () => fillAll(album), 'ghost',
+    { disabled: (!detail.filling && linked === yt.tracks.length) || undefined });
+  const queue = btn(job ? (job.state === 'done' ? 'Done' : 'In the queue') : 'Queue', event => queueYoutube(album, event.currentTarget), 'primary',
+    { disabled: !!job || !linked || detail.filling || undefined });
+  return el('div', { class: 'yt-bar' }, edition,
+    el('span', { class: 'small muted tabular yt-count' }, `${linked} of ${plural(yt.tracks.length, 'track')} linked`),
+    el('div', { class: 'row actions' }, fill, queue));
+}
+
+function youtubeBlock(album) {
+  const head = el('h3', { class: 'h2' }, 'Build from YouTube');
+  const intro = el('p', { class: 'small muted yt-intro' },
+    "Paste a link for each track, or let Encore find them. The sound becomes the album, as YouTube has it (AAC), and each video is filed with the artist's music videos.");
+  if (detail.ytError) return el('section', { class: 'detail-section yt-builder' }, head, note(detail.ytError, 'bad'));
+  if (!detail.yt) return el('section', { class: 'detail-section yt-builder' }, head, note('Loading tracks…'));
+  const rows = [];
+  let disc = null;
+  for (const track of detail.yt.tracks) {
+    if (detail.yt.discs > 1 && track.disc !== disc) {
+      disc = track.disc;
+      rows.push(el('li', { class: 'disc eyebrow' }, `Disc ${disc}`));
+    }
+    rows.push(youtubeRow(album, track));
+  }
+  return el('section', { class: 'detail-section yt-builder' }, head, intro, youtubeBar(album), el('ol', { class: 'yt-tracks' }, ...rows));
+}
+
+function updateRow(album, key) {
+  const node = $('detail').querySelector(`.yt-track[data-key="${key}"]`), track = detail.yt.tracks.find(t => t.key === key);
+  if (node && node.isConnected && track) node.replaceWith(youtubeRow(album, track));
+  refreshYoutubeBar();
+}
+
+function refreshYoutubeBar() {
+  const bar = $('detail').querySelector('.yt-bar');
+  if (bar && detail && detail.yt) bar.replaceWith(youtubeBar(detail.data || detail.summary));
+}
+
+async function setLink(album, key, url) {
+  const opened = detail;
+  opened.ytBusy[key] = true;
+  delete opened.ytErrors[key];
+  updateRow(album, key);
+  try {
+    const row = await api(`/api/album/${album.id}/youtube/link`, { method: 'POST', body: JSON.stringify({ key, url }) });
+    opened.yt.tracks = opened.yt.tracks.map(t => (t.key === key ? row : t));
+    delete opened.found[key];
+    delete opened.ytTyped[key];
+  } catch (error) {
+    opened.ytErrors[key] = error.message;
+    opened.ytTyped[key] = url;
+  }
+  opened.ytBusy[key] = false;
+  if (detail === opened) updateRow(album, key);
+}
+
+async function findOnYoutube(album, key) {
+  const opened = detail;
+  opened.found[key] = 'loading';
+  delete opened.ytErrors[key];
+  updateRow(album, key);
+  try {
+    opened.found[key] = (await api(`/api/album/${album.id}/youtube/find`, { method: 'POST', body: JSON.stringify({ key }) })).results;
+  } catch (error) {
+    delete opened.found[key];
+    opened.ytErrors[key] = error.message;
+  }
+  if (detail === opened) updateRow(album, key);
+  return opened.found[key];
+}
+
+// One track at a time, so YouTube isn't asked twelve things at once. A best match that's far off
+// in length isn't taken: its choices stay open for a person to pick from.
+async function fillAll(album) {
+  const opened = detail;
+  if (opened.filling) { opened.filling = false; return refreshYoutubeBar(); }
+  opened.filling = true;
+  refreshYoutubeBar();
+  for (const track of opened.yt.tracks.filter(t => !t.video)) {
+    if (!opened.filling || detail !== opened || opened.view !== 'youtube') break;
+    const found = await findOnYoutube(album, track.key);
+    const best = Array.isArray(found) ? found[0] : null;
+    if (best && opened.filling && best.fit !== 'off' && best.score > 50) await setLink(album, track.key, best.id);
+  }
+  opened.filling = false;
+  if (detail === opened) refreshYoutubeBar();
+}
+
+async function changeEdition(album, edition, select) {
+  const opened = detail;
+  await busy(select, async () => {
+    opened.yt = await api(`/api/album/${album.id}/youtube/edition`, { method: 'POST', body: JSON.stringify({ edition }) });
+    opened.found = {};
+    opened.ytErrors = {};
+    opened.ytTyped = {};
+  });
+  if (detail === opened) renderDetail(true);
+}
+
+async function queueYoutube(album, button) {
+  const tracks = detail.yt.tracks, linked = tracks.filter(t => t.video), blank = tracks.length - linked.length;
+  if (blank && !(await window.duConfirm(button, `${plural(blank, 'track')} ${blank === 1 ? 'has' : 'have'} no link. Queue the other ${linked.length}?`, `Queue ${plural(linked.length, 'track')}`))) return;
+  const off = linked.filter(t => t.video.fit === 'off').length;
+  if (off && !(await window.duConfirm(button, `${plural(off, 'video')} ${off === 1 ? 'is' : 'are'} very different in length from the album. Queue anyway?`, 'Queue anyway'))) return;
+  const added = await busy(button, () => api('/api/queue/youtube', { method: 'POST', body: JSON.stringify({ album_id: album.id, partial: blank > 0 }) }));
+  if (added === undefined) return;
+  toast(`${album.title} is in the queue.`);
+  await refreshJobs();
+  await loadWanted();
+  if (detail) showAlbumView(detail.data || detail.summary);
 }
 
 $('detail').onclose = () => { detail = null; };
@@ -248,11 +466,16 @@ function jobCard(job) {
   const running = isRunning(job);
   const percent = job.state === 'downloading' ? job.percent : 100;
   let state = ['failed', 'done'].includes(job.state) ? job.message : stateText[job.state];
-  if (job.state === 'downloading') state = job.step ? `SABnzbd: ${job.step}` : `Downloading ${Math.round(job.percent)}%`;
+  if (job.state === 'downloading') {
+    if (job.kind === 'youtube') state = `${job.step || 'Downloading'} · ${Math.round(job.percent)}%`;
+    else state = job.step ? `SABnzbd: ${job.step}` : `Downloading ${Math.round(job.percent)}%`;
+  }
   if (job.state === 'done' && job.quality) state += ` · ${job.quality}`;
   const buttons = [];
   if (job.state === 'failed') {
-    if (job.kind !== 'video') buttons.push(btn('Pick another', () => openAlbum({ id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover })));
+    const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
+    if (job.kind === 'youtube') buttons.push(btn('Change links', () => openAlbum(album, false, 'youtube')));
+    else if (job.kind !== 'video') buttons.push(btn('Pick another', () => openAlbum(album)));
     buttons.push(btn('Retry', event => act(`/api/queue/${job.id}/retry`, 'POST', event.currentTarget)));
   }
   if (job.state === 'failed' && (job.can_import || job.message.startsWith('Not all FLAC'))) {
@@ -272,7 +495,7 @@ function jobCard(job) {
     grip,
     cover(job.cover),
     el('div', { class: 'job-body' },
-      el('div', { class: 'job-title' }, `${job.artist} – ${job.title}`),
+      el('div', { class: 'job-title' }, `${job.artist} – ${job.title}`, job.kind === 'youtube' ? el('span', { class: 'badge-muted job-kind' }, 'YouTube') : null),
       el('div', { class: 'job-state small' }, state),
       running ? el('div', { class: 'progress-track job-bar' }, el('div', { class: 'progress-fill', style: `width:${percent}%` })) : null,
       buttons.length ? el('div', { class: 'row actions' }, ...buttons) : null));

@@ -286,3 +286,64 @@ def score_video(artist, item):
     if reasons:
         return {"tier": "no", "score": 0, "quality": label, "song": song, "notes": reasons}
     return {"tier": "good" if resolution >= 720 and not live else "maybe", "score": points, "quality": label, "song": song, "notes": notes}
+
+
+# ---------------------------------------------------------------- YouTube
+
+YOUTUBE_WRONG = ("live", "cover", "remix", "lyrics", "lyric", "karaoke", "sped up", "slowed", "reaction", "8d",
+                 "instrumental", "nightcore", "reverb", "tutorial", "lesson", "full album", "concert")
+
+
+def youtube_fit(track_seconds, video_seconds):
+    """good, close or off by length; "" when either length is unknown."""
+    if not track_seconds or not video_seconds:
+        return ""
+    gap = abs(track_seconds - video_seconds)
+    if gap <= max(4, track_seconds * 0.05):
+        return "good"
+    return "close" if gap <= max(10, track_seconds * 0.15) else "off"
+
+
+def audio_only(channel):
+    """YouTube's auto-generated "Artist - Topic" uploads are the album audio over a still of the cover."""
+    return (channel or "").rstrip().endswith(" - Topic")
+
+
+def score_youtube(track, artist, video):
+    """Ranks a video for one track: the right length, the artist's own channel, the track's title,
+    and none of the words that mean it's some other version."""
+    title, channel = words(video["title"]), words(video.get("channel"))
+    named = words(artist)
+    fit = youtube_fit(track.get("seconds"), video["seconds"])
+    gap = abs((track.get("seconds") or 0) - video["seconds"])
+    points, notes = 100.0, []
+    if track.get("seconds") and video["seconds"]:
+        points -= min(60.0, gap / track["seconds"] * 200)
+        if fit != "good":
+            notes.append(f"{'Longer' if video['seconds'] > track['seconds'] else 'Shorter'} by {gap // 60}:{gap % 60:02d}")
+    if audio_only(video.get("channel")) and find_span(channel, named) is not None:
+        points += 40
+        notes.append("Audio only, so no video is filed")
+    elif channel and (channel == named or channel in (named + ["vevo"], named + ["official"], ["".join(named) + "vevo"])):
+        points += 25
+    if locate(title, artist) or locate(channel, artist):
+        points += 10
+    else:
+        points -= 15
+        notes.append("Doesn't name the artist")
+    if find_span(title, words(track["title"])) is not None:
+        points += 20
+    else:
+        points -= 30
+        notes.append("Title doesn't match")
+    wanted = " ".join(words(track["title"]))
+    said = " ".join(title)
+    for word in YOUTUBE_WRONG:
+        if f" {word} " in f" {said} " and f" {word} " not in f" {wanted} ":
+            points -= 40
+            notes.append(word.capitalize())
+            break
+    if video.get("live"):
+        points -= 100
+        notes.append("A live stream")
+    return {"fit": fit, "score": round(points, 1), "notes": notes}
