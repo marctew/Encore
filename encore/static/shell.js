@@ -28,8 +28,17 @@ export function glyph(name, cls = 'icon-sm') {
   return svg;
 }
 
+// A failure between the browser and Encore (the tunnel dropping, Encore restarting) is marked
+// `unreachable`, so a caller working through a list can wait and try again.
+const unreachable = () => Object.assign(new Error("Couldn't reach Encore. Try again in a moment"), { unreachable: true });
+
 export async function api(path, options = {}) {
-  const res = await fetch(path, { ...options, headers: { 'X-Encore': '1', 'Content-Type': 'application/json' } });
+  let res;
+  try {
+    res = await fetch(path, { ...options, headers: { 'X-Encore': '1', 'Content-Type': 'application/json' } });
+  } catch {
+    throw unreachable();
+  }
   if (res.status === 401 && path !== '/api/login') {
     location.href = '/login';
     throw new Error('Sign in first');
@@ -37,6 +46,8 @@ export async function api(path, options = {}) {
   if (!res.ok) {
     let text = await res.text();
     try { text = JSON.parse(text).error || text; } catch {}
+    // An HTML page here is Cloudflare's (or a proxy's), not Encore's: Encore only answers in JSON or plain text.
+    if ([502, 504, 520, 521, 522, 523, 524, 530].includes(res.status) || /^\s*</.test(text)) throw unreachable();
     throw new Error(text || 'Request failed');
   }
   return res.json();

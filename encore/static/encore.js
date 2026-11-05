@@ -294,7 +294,7 @@ function youtubeRow(album, track) {
   input.onpaste = () => setTimeout(commit, 0);
   input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } };
   const find = el('button', { type: 'button', class: 'btn-icon', title: 'Find on YouTube', 'aria-label': `Find ${track.title} on YouTube`,
-    disabled: working || found === 'loading' || undefined, onclick: () => findOnYoutube(album, key) }, glyph('search', 'icon-sm'));
+    disabled: working || found === 'loading' || undefined, onclick: () => findOnYoutube(album, key).catch(() => {}) }, glyph('search', 'icon-sm'));
   const clear = track.video ? el('button', { type: 'button', class: 'btn-icon', title: 'Remove link', 'aria-label': `Remove the link for ${track.title}`,
     disabled: working || undefined, onclick: () => setLink(album, key, '') }, glyph('x', 'icon-sm')) : null;
   let choices = null;
@@ -386,28 +386,52 @@ async function findOnYoutube(album, key) {
   opened.found[key] = 'loading';
   delete opened.ytErrors[key];
   updateRow(album, key);
+  let failure = null;
   try {
     opened.found[key] = (await api(`/api/album/${album.id}/youtube/find`, { method: 'POST', body: JSON.stringify({ key }) })).results;
   } catch (error) {
     delete opened.found[key];
     opened.ytErrors[key] = error.message;
+    failure = error;
   }
   if (detail === opened) updateRow(album, key);
+  if (failure) throw failure;
   return opened.found[key];
 }
 
 // One track at a time, so YouTube isn't asked twelve things at once. A best match that's far off
-// in length isn't taken: its choices stay open for a person to pick from.
+// in length isn't taken: its choices stay open for a person to pick from. If Encore can't be reached
+// (a tunnel reconnecting takes a few seconds to a minute), it waits and tries the same track again,
+// and stops if it still can't, rather than failing every track left.
+const RETRY_WAITS = [5000, 15000, 30000];
+const pause = ms => new Promise(done => setTimeout(done, ms));
+
 async function fillAll(album) {
   const opened = detail;
   if (opened.filling) { opened.filling = false; return refreshYoutubeBar(); }
   opened.filling = true;
   refreshYoutubeBar();
+  const going = () => opened.filling && detail === opened && opened.view === 'youtube';
   for (const track of opened.yt.tracks.filter(t => !t.video)) {
-    if (!opened.filling || detail !== opened || opened.view !== 'youtube') break;
-    const found = await findOnYoutube(album, track.key);
+    let found;
+    for (let attempt = 0; going(); attempt++) {
+      try {
+        found = await findOnYoutube(album, track.key);
+        break;
+      } catch (error) {
+        if (!error.unreachable || attempt >= RETRY_WAITS.length) break;
+        opened.ytErrors[track.key] = `${error.message}. Trying again in ${RETRY_WAITS[attempt] / 1000} seconds`;
+        if (detail === opened) updateRow(album, track.key);
+        await pause(RETRY_WAITS[attempt]);
+      }
+    }
+    if (!going()) break;
+    if (!found && opened.ytErrors[track.key]?.startsWith("Couldn't reach Encore")) {
+      toast("Fill all stopped: Encore can't be reached. Try again in a minute.", 'error');
+      break;
+    }
     const best = Array.isArray(found) ? found[0] : null;
-    if (best && opened.filling && best.fit !== 'off' && best.score > 50) await setLink(album, track.key, best.id);
+    if (best && going() && best.fit !== 'off' && best.score > 50) await setLink(album, track.key, best.id);
   }
   opened.filling = false;
   if (detail === opened) refreshYoutubeBar();

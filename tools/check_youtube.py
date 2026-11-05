@@ -118,7 +118,7 @@ def main():
     status, body = link(client, "1-1", "https://evil.example/watch?v=aaaaaaaaaa1")
     expect("a link to another site is refused", status == 400, body)
     status, body = link(client, "1-1", "https://www.youtube.com/watch?v=nosuchvideo")
-    expect("a missing video says so", status == 502 and "removed or made private" in body["error"], body)
+    expect("a missing video says so", status == 503 and "removed or made private" in body["error"], body)
     status, body = link(client, "9-9", "aaaaaaaaaa1")
     expect("a track that isn't there is refused", status == 404, body)
     status, body = link(client, "1-1", "https://youtu.be/aaaaaaaaaa1")

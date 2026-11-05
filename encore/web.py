@@ -920,9 +920,10 @@ def create_app():
     def refused(error):
         return Response(error.text, status=error.status, content_type="text/plain; charset=utf-8")
 
+    # 503, not 502: Cloudflare swaps an origin's 502 for its own error page, which would hide the message.
     @app.errorhandler(SourceError)
     def source_failed(error):
-        return jsonify(error=str(error)), 502
+        return jsonify(error=str(error)), 503
 
     return app
 
