@@ -9,7 +9,7 @@ How Marc's homelab apps are built, so every app is put together, run and updated
 | | Standard | Why |
 |---|---|---|
 | Language | Python 3 from the distro, with packages from `apt` where it has them | One toolchain to keep up to date. When an app needs packages `apt` lacks (or too old), it uses `.venv/` in the checkout, filled from `requirements.txt` by `scripts/update.sh`, as Vital Signs does. |
-| Web | Flask, Jinja templates rendered on the server | Every app is already Flask, or is being rewritten into it. |
+| Web | Flask, Jinja templates rendered on the server | Every app is Flask, except claude-ops (below). |
 | Server | gunicorn, **one worker**, many threads (`--threads 32`) | Apps keep jobs and caches in memory, so there must be one process. Threads let video streams and slow requests run side by side. |
 | Process | a systemd service, one app per LXC | Restarts, logs and start-up order come free. |
 | CSS | `static/design/uniform.css` plus the app's own `static/<app>.css` | No build step, so a design update is just files. |
@@ -17,6 +17,8 @@ How Marc's homelab apps are built, so every app is put together, run and updated
 | Data | SQLite or JSON files in `/var/lib/<app>/` | No database server to run. |
 
 **The exception is Binge Stats**, which other people install from GHCR. It stays in Docker and on Tailwind (`css/tailwind-components.css` maps Tailwind onto the same design), but the rest of this file still applies: `/healthz`, `scripts/update.sh`, the Settings card and the repo layout.
+
+**claude-ops is the other exception.** It's the MCP server Claude operates the homelab through, so its security model comes first. Its MCP endpoint must stay on FastMCP, and its admin page is a small Starlette app in the same process, sharing its state. Both stay in Docker on LXC 995, which Claude can't reach; Marc reviews and deploys every change. Its page takes the look (DESIGN-SPEC 7.15 included) but none of the machinery: the shared CSS is copied in by hand and inlined into each page, so its CSP (inline styles and scripts only, nothing loaded from anywhere) never changes. There's no updater, no Design system card and no `scripts/update.sh`.
 
 **Not allowed:** the Flask development server in production; more than one gunicorn worker; Node or a CSS build step (except Binge); CSS or JS written inside Python strings.
 
@@ -159,7 +161,9 @@ One app at a time, each in its own commit:
 |---|---|
 | The Back Room | Reference app, 2026-11-04 |
 | Vital Signs | Done 2026-11-04: gunicorn, `/healthz`, `scripts/update.sh`, restyled. Keeps its venv, TOML config and `server/` + `agent/` layout |
-| PodBridge | Moves from Docker to systemd |
-| Encore | Rewrite from aiohttp |
-| Binge Stats | Commit today's changes first; stays in Docker (section 1) |
-| claude-ops | Rewrite from uvicorn, last; design updates by hand only |
+| PodBridge | Done 2026-11-04: Docker to systemd (the Docker leftovers were removed 2026-11-05), restyled, new icon 2026-11-05 |
+| Encore | Done 2026-11-04: rewritten from aiohttp to a Flask package, restyled in Downloads blue |
+| Binge Stats | Done 2026-11-04: `/healthz`, `scripts/update.sh` and the Settings card; stays in Docker and Tailwind (section 1) |
+| claude-ops | Done 2026-11-04: restyled in place, design updates by hand only (section 1) |
+
+Every app above except claude-ops is on the design updater.
