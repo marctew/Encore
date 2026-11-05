@@ -876,8 +876,20 @@ async function loadLibrary(sync = false) {
   }
 }
 
+// Plex hasn't matched every artist to MusicBrainz. For those, Encore finds the artist itself (once,
+// then it's remembered) and only falls back to a name search when it can't tell who it is.
+async function openPlexArtist(artist, button) {
+  if (artist.id) return openArtistPage(artist.id);
+  let id = null;
+  await busy(button, async () => { id = (await api(`/api/plex/artist/${artist.rating}/match`)).id; });
+  if (!id) return searchFor(artist.name);
+  for (const each of shelf ? shelf.artists : []) if (each.rating === artist.rating) each.id = id;
+  artist.id = id;
+  openArtistPage(id);
+}
+
 function libraryTile(artist) {
-  const open = () => artist.id ? openArtistPage(artist.id) : searchFor(artist.name);
+  const open = event => openPlexArtist(artist, event.currentTarget);
   return el('button', { type: 'button', class: 'card tile', onclick: open },
     portrait(`/api/plex/thumb/${artist.rating}`, artist.name),
     el('strong', { class: 'tile-name' }, artist.name), el('span', { class: 'small muted' }, plural(artist.albums, 'album')));

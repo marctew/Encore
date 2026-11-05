@@ -22,4 +22,4 @@ Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md
 
 ## Tests
 
-`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes), `tools/check_youtube.py` (YouTube albums against a fake yt-dlp, `tools/fake_ytdlp.py`) and `tools/check_auth.py` (the password and the guard) print PASS lines and exit non-zero on a failure. Run all three with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.
+`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes), `tools/check_youtube.py` (YouTube albums against a fake yt-dlp, `tools/fake_ytdlp.py`) and `tools/check_auth.py` (the password, the guard, and matching Plex artists) print PASS lines and exit non-zero on a failure. Run all three with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.

@@ -135,6 +135,29 @@ def main():
     client.delete_cookie(server.COOKIE)
     expect("open again", client.get("/api/queue").status_code == 200)
 
+    # Plex artists Plex hasn't matched to MusicBrainz
+    s = app.extensions["encore"]
+    one, two, three = ("11111111-0000-0000-0000-00000000000" + n for n in "123")
+    s.store.replace_plex([{"rating": "1", "name": "Feeder", "mbid": "", "thumb": ""},
+                          {"rating": "2", "name": "Rainbow", "mbid": "", "thumb": ""},
+                          {"rating": "3", "name": "Nobody Known", "mbid": "", "thumb": ""}],
+                         [{"rating": "10", "artist_rating": "2", "artist": "Rainbow", "title": "Rising (Deluxe)", "year": 1976, "thumb": ""}])
+    people = {"Feeder": [{"id": one, "name": "Feeder"}, {"id": "x", "name": "Coffin Feeder"}],
+              "Rainbow": [{"id": two, "name": "Rainbow"}, {"id": three, "name": "Rainbow"}], "Nobody Known": []}
+    asked = []
+    s.brainz.artists = lambda name: [server.artist_card({"id": a["id"], "name": a["name"]}, set()) for a in people[name]]
+    s.brainz.artist_albums = lambda artist_id: asked.append(artist_id) or (
+        [{"id": "r1", "title": "Rising", "artist": "Rainbow", "artist_id": artist_id, "year": "1976", "kind": "Album", "cover": ""}]
+        if artist_id == three else [{"id": "r2", "title": "Something Else", "artist": "Rainbow", "artist_id": artist_id, "year": "1990", "kind": "Album", "cover": ""}])
+    match = lambda rating: client.get(f"/api/plex/artist/{rating}/match").get_json()["id"]
+    expect("one artist of that name is taken", match(1) == one)
+    expect("the match is kept", [a["id"] for a in client.get("/api/library").get_json()["artists"] if a["name"] == "Feeder"] == [one])
+    expect("and counts as in your library", one in s.owned.artists)
+    expect("several of that name: the one with your albums", match(2) == three, asked)
+    expect("nobody found falls back to a search", match(3) is None)
+    s.store.replace_plex([{"rating": "1", "name": "Somebody Else", "mbid": "", "thumb": ""}], [])
+    expect("a reused rating doesn't inherit the match", client.get("/api/library").get_json()["artists"][0]["id"] == "")
+
 
 main()
 sys.exit(0 if all(results) else 1)

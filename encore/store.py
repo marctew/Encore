@@ -20,9 +20,15 @@ CREATE TABLE IF NOT EXISTS plex_albums (rating TEXT PRIMARY KEY, artist_rating T
 CREATE TABLE IF NOT EXISTS wanted (album_id TEXT PRIMARY KEY, artist_id TEXT, data TEXT, added REAL,
     searched_at REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS facts (name TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS plex_links (rating TEXT PRIMARY KEY, mbid TEXT, name TEXT);
 CREATE TABLE IF NOT EXISTS youtube_drafts (album_id TEXT PRIMARY KEY, edition TEXT, links TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS youtube_videos (id TEXT PRIMARY KEY, data TEXT, saved_at REAL);
 """
+
+
+# Plex artists with their MusicBrainz id: Plex's own, or the one Encore found for an artist Plex hasn't matched.
+ARTISTS = ("(SELECT a.rating, a.name, a.thumb, COALESCE(NULLIF(a.mbid, ''), l.mbid, '') AS mbid "
+           "FROM plex_artists a LEFT JOIN plex_links l ON l.rating = a.rating AND l.name = a.name)")
 
 
 class Store:
@@ -118,15 +124,15 @@ class Store:
 
     def plex_artists(self):
         return [dict(r) for r in self.rows(
-            "SELECT a.rating, a.name, a.mbid, a.thumb, COUNT(b.rating) AS albums FROM plex_artists a "
+            f"SELECT a.rating, a.name, a.mbid, a.thumb, COUNT(b.rating) AS albums FROM {ARTISTS} a "
             "LEFT JOIN plex_albums b ON b.artist_rating = a.rating GROUP BY a.rating ORDER BY a.name COLLATE NOCASE")]
 
     def plex_albums(self):
         return [dict(r) for r in self.rows("SELECT a.*, p.mbid FROM plex_albums a "
-                                           "LEFT JOIN plex_artists p ON p.rating = a.artist_rating")]
+                                           f"LEFT JOIN {ARTISTS} p ON p.rating = a.artist_rating")]
 
     def plex_artist(self, mbid):
-        row = self.one("SELECT * FROM plex_artists WHERE mbid = ?", mbid)
+        row = self.one(f"SELECT * FROM {ARTISTS} WHERE mbid = ?", mbid)
         return dict(row) if row else None
 
     def plex_thumb(self, rating):
@@ -164,3 +170,12 @@ class Store:
     def save_youtube_video(self, video):
         self.db.execute("INSERT OR REPLACE INTO youtube_videos (id, data, saved_at) VALUES (?, ?, ?)",
                         (video["id"], json.dumps(video), time.time()))
+
+    def plex_artist_by_rating(self, rating):
+        row = self.one(f"SELECT * FROM {ARTISTS} WHERE rating = ?", rating)
+        return dict(row) if row else None
+
+    def link_plex(self, rating, mbid, name):
+        """Remembers the MusicBrainz artist for one Plex hasn't matched. Tied to the name too, so it
+        lapses if Plex ever reuses the rating key for someone else."""
+        self.db.execute("INSERT OR REPLACE INTO plex_links (rating, mbid, name) VALUES (?, ?, ?)", (rating, mbid, name))

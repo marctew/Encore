@@ -180,20 +180,27 @@ def artist_card(artist, held, first_of_name=True):
     return {**{k: artist.get(k) for k in fields}, "in_library": artist["id"] in held, "best": first_of_name}
 
 
+def artists_named(s, text, refresh=False):
+    """MusicBrainz artists whose name holds these words, kept so each name is only asked once."""
+    words = norm(text)
+    ids, saved_at = s.store.search("artist", words)
+    found = [s.store.artist(i) for i in ids] if ids is not None and not refresh else None
+    if found is None or None in found:
+        found = [a for a in s.brainz.artists(text) if has_words(norm(a["name"]), words)]
+        for artist in found:
+            s.store.save_artist(artist)
+        s.store.save_search("artist", words, [a["id"] for a in found])
+        saved_at = time.time()
+    return found, saved_at
+
+
 @bp.get("/api/artists")
 def search_artists():
     words = norm(request.args.get("q", ""))
     if not words:
         return jsonify(artists=[])
     s = svc()
-    ids, saved_at = s.store.search("artist", words)
-    found = [s.store.artist(i) for i in ids] if ids is not None and "refresh" not in request.args else None
-    if found is None or None in found:
-        found = [a for a in s.brainz.artists(request.args["q"]) if has_words(norm(a["name"]), words)]
-        for artist in found:
-            s.store.save_artist(artist)
-        s.store.save_search("artist", words, [a["id"] for a in found])
-        saved_at = time.time()
+    found, saved_at = artists_named(s, request.args["q"], "refresh" in request.args)
     held = s.owned.artists
     order = sorted(enumerate(found), key=lambda pair: (pair[1]["id"] not in held, norm(pair[1]["name"]) != words, pair[0]))
     named, artists = set(), []
@@ -202,6 +209,41 @@ def search_artists():
         artists.append(artist_card(artist, held, key not in named))
         named.add(key)
     return jsonify(artists=artists, saved_at=saved_at)
+
+
+MATCH_TRIES = 5
+
+
+def albums_known(s, artist):
+    """An artist's albums from MusicBrainz, kept like the artist page keeps them."""
+    if not (s.store.artist(artist["id"]) or {}).get("albums_at"):
+        s.store.save_artist(artist)
+        s.store.save_albums(artist["id"], s.brainz.artist_albums(artist["id"]))
+    return s.store.albums_of(artist["id"])
+
+
+@bp.get("/api/plex/artist/<int:rating>/match")
+def match_plex_artist(rating):
+    """The MusicBrainz artist for a Plex artist Plex hasn't matched itself. One artist of exactly that
+    name is taken; with several, the one sharing the most albums with what's in Plex, if any does."""
+    s = svc()
+    row = s.store.plex_artist_by_rating(str(rating))
+    if not row:
+        raise Refusal(404)
+    if row["mbid"]:
+        return jsonify(id=row["mbid"])
+    named = [a for a in artists_named(s, row["name"])[0] if norm(a["name"]) == norm(row["name"])]
+    chosen = named[0] if len(named) == 1 else None
+    if len(named) > 1:
+        held = {album_key(a["title"]) for a in s.store.plex_albums() if a["artist_rating"] == str(rating)}
+        shared = [(len(held & {album_key(b["title"]) for b in albums_known(s, a)}), a) for a in named[:MATCH_TRIES]]
+        best = max(shared, key=lambda pair: pair[0], default=(0, None))
+        chosen = best[1] if best[0] else None
+    if not chosen:
+        return jsonify(id=None)
+    s.store.link_plex(str(rating), chosen["id"], row["name"])
+    s.owned.load(s.store)
+    return jsonify(id=chosen["id"])
 
 
 @bp.get("/api/artist/<artist_id>")
