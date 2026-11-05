@@ -29,6 +29,9 @@ BUSY = (429, 502, 503, 504)
 AUDIO_CATEGORIES = "3000,3010,3040,3999"
 VIDEO_CATEGORY = "3020"
 PAGE_PAUSES = (2, 3, 5, 8, 12, 15, 15)
+# How long the page waits on MusicBrainz in all, for one album or search. Cloudflare gives up on
+# a request after 100 seconds and shows its own 502 page, so answer well before that.
+PAGE_BUDGET = 70
 BACKGROUND_PAUSES = (5,)
 DEFAULTS = {"indexers": [], "sab": {"url": "", "key": ""}, "plex": {"url": ""},
             "folders": {"music": "", "imports": "", "downloads": ""}}
@@ -97,8 +100,8 @@ class Web:
             self.local.session.headers["User-Agent"] = AGENT
         return self.local.session
 
-    def get(self, url, **kwargs):
-        return self.session().get(url, timeout=TIMEOUT, **kwargs)
+    def get(self, url, timeout=TIMEOUT, **kwargs):
+        return self.session().get(url, timeout=timeout, **kwargs)
 
     def post(self, url, **kwargs):
         return self.session().post(url, timeout=TIMEOUT, **kwargs)
@@ -130,20 +133,26 @@ class MusicBrainz:
         self.last = 0
         self.busy = 0
 
-    def get(self, path, background=False, **params):
+    def get(self, path, background=False, deadline=None, **params):
         """busy counts what the page is waiting on, so background filling steps aside for it.
         MusicBrainz often answers 503 "busy" well under its rate limit, so a page request keeps
-        trying for about a minute, and the lock is free meanwhile."""
+        trying for about a minute, and the lock is free meanwhile. deadline (a time.time()) caps
+        the whole wait, across retries and across the several calls one album takes."""
         params["fmt"] = "json"
+        if deadline is None and not background:
+            deadline = time.time() + PAGE_BUDGET
         with self.count:
             self.busy += not background
         try:
             for pause in (*(BACKGROUND_PAUSES if background else PAGE_PAUSES), None):
                 with self.lock:
                     time.sleep(max(0, self.last + 1.1 - time.time()))
+                    left = deadline - time.time() if deadline else TIMEOUT
+                    if left < 3:
+                        break
                     self.last = time.time()
                     try:
-                        response = self.web.get(MB + path, params=params)
+                        response = self.web.get(MB + path, params=params, timeout=min(TIMEOUT, left))
                         if response.status_code == 404:
                             raise SourceError("MusicBrainz doesn't know that")
                         if response.status_code in BUSY:
@@ -155,10 +164,10 @@ class MusicBrainz:
                         log.warning("MusicBrainz timed out")
                     except (requests.RequestException, ValueError) as error:
                         log.warning("MusicBrainz call failed: %s", type(error).__name__)
-                if pause is None:
+                if pause is None or (deadline and time.time() + pause > deadline - 3):
                     break
                 time.sleep(pause)
-            raise SourceError("MusicBrainz stayed busy for a minute. Try again shortly.")
+            raise SourceError("MusicBrainz is busy right now. Try again shortly.")
         finally:
             with self.count:
                 self.busy -= not background
@@ -224,11 +233,13 @@ class MusicBrainz:
         saved = None if refresh else self.store.details(album_id)
         if saved:
             return saved
-        group = self.get(f"release-group/{album_id}", background=background, inc="artist-credits")
+        deadline = None if background else time.time() + PAGE_BUDGET
+        group = self.get(f"release-group/{album_id}", background=background, deadline=deadline,
+                         inc="artist-credits")
         details = self.summary(group)
         releases = []
         while True:
-            data = self.get("release", background=background, **{"release-group": album_id},
+            data = self.get("release", background=background, deadline=deadline, **{"release-group": album_id},
                             inc="recordings artist-credits labels", limit=100, offset=len(releases))
             found = data.get("releases") or []
             releases += found
