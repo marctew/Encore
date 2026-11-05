@@ -36,6 +36,7 @@ VIDEOS = {
     "aaaaaaaaaa3": {"title": "Test Band - Oh! Darling", "channel": "Test Band", "duration": 10},
     "aaaaaaaaaa4": {"title": "Test Band - Something (Live)", "channel": "Fan Uploads", "duration": 30},
     "brokenvide0": {"title": "Test Band - Something", "channel": "Test Band", "duration": 9, "fail": "HTTP Error 403: Forbidden"},
+    "aaaaaaaaaa5": {"title": "Test Band - Something (Official Video)", "channel": "Test Band", "duration": 9},
     "slowvideo00": {"title": "Test Band - Oh! Darling", "channel": "Test Band", "duration": 10, "slow": True},
 }
 
@@ -127,7 +128,9 @@ def main():
     found = client.post(f"/api/album/{ALBUM_ID}/youtube/find", json={"key": "1-2"}, headers=HEAD).get_json()["results"]
     ids = [v["id"] for v in found]
     expect("Find puts the Topic upload first", ids[0] == "aaaaaaaaaa2" and found[0]["audio_only"], ids)
-    expect("Find puts the live fan upload last", ids[-1] == "aaaaaaaaaa4" and found[-1]["fit"] == "off", [(v["id"], v["score"]) for v in found])
+    live = [v for v in found if v["id"] == "aaaaaaaaaa4"]
+    expect("Find puts the live fan upload last, if at all", (not live or (ids[-1] == "aaaaaaaaaa4" and live[0]["fit"] == "off"))
+           and "aaaaaaaaaa4" != ids[0], [(v["id"], v["score"]) for v in found])
 
     response = client.post("/api/queue/youtube", json={"album_id": ALBUM_ID}, headers=HEAD)
     expect("queueing with blank tracks needs a yes", response.status_code == 409, response.get_data(as_text=True))
@@ -151,7 +154,7 @@ def main():
     expect("AAC kept as it was", tags and tags.info.codec.startswith("mp4a") and job["quality"].startswith("YouTube AAC"), job["quality"])
     videos = sorted(p.name for p in (music / "Test Band").glob("*-video.mp4"))
     expect("videos filed for the artist, not the audio-only one", videos == ["Come Together-video.mp4", "Oh! Darling-video.mp4"], videos)
-    expect("the message says so", "2 videos filed, 1 audio only." in job["message"], job["message"])
+    expect("the message says so", "2 videos filed, no video from 1 audio-only upload." in job["message"], job["message"])
     expect("downloads cleared", not any(downloads_dir.rglob("*.mp4")), list(downloads_dir.rglob("*")))
     expect("one download per track", sorted(downloads()) == ["aaaaaaaaaa1", "aaaaaaaaaa2", "aaaaaaaaaa3"], downloads())
 
@@ -204,6 +207,43 @@ def main():
     alive = Path(f"/proc/{pid}").exists() and "Z" not in Path(f"/proc/{pid}/stat").read_text().split()[2]
     expect("cancel stops the download", job["state"] == "failed" and job["message"] == "Cancelled." and not alive, job["message"])
     expect("cancelled download cleared", not job.get("storage") and not any(downloads_dir.rglob("*.mp4")))
+
+    # A Usenet download that's missing a track, filled from YouTube
+    s.queue.jobs.clear()
+    subprocess.run(["rm", "-rf", str(music / "Test Band")], check=True)
+    release = downloads_dir / "Test Band - Can't Stop [usenet]"
+    release.mkdir()
+    for number, seconds in ((1, 8), (3, 10)):
+        subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", f"sine=frequency={200 * number}:duration={seconds}",
+                        "-ar", "44100", "-sample_fmt", "s16", str(release / f"{number:02d} - {TITLES[number - 1]}.flac")], check=True)
+    usenet = {"title": "Can't Stop", "artist": "Test Band", "year": "1969", "tracks": 3, "cover": "", "album_id": ALBUM_ID,
+              "id": "usenet000001", "state": "queued", "percent": 0, "message": "", "fix_artist": True, "folder": "", "quality": "",
+              "added": time.time(), "partial": False, "any_format": False, "reuse": True, "storage": str(release),
+              "source": {"indexer": "Fake", "guid": "g", "title": "Test Band - Can't Stop FLAC", "size": 10**7, "key": "k"}}
+    with s.queue.lock:
+        s.queue.jobs.append(usenet)
+    s.queue.wake.set()
+    job = wait(s.queue, usenet["id"])
+    expect("a missing track waits", job["state"] == "failed" and job.get("can_partial") and [m["key"] for m in job.get("missing", [])] == ["1-2"], job["message"])
+    link(client, "1-2", "")
+    gaps = client.get(f"/api/album/{ALBUM_ID}/youtube?job={job['id']}").get_json()
+    expect("Fill from YouTube lists only the gap", [t["title"] for t in gaps["tracks"]] == ["Something"] and gaps["fill"]["have"] == 2, gaps)
+    response = client.post(f"/api/queue/{job['id']}/fill", headers=HEAD)
+    expect("filling needs a link first", response.status_code == 409, response.get_data(as_text=True))
+    link(client, "1-2", "aaaaaaaaaa5")
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    response = client.post(f"/api/queue/{job['id']}/fill", headers=HEAD)
+    expect("fill accepted", response.status_code == 200, response.get_data(as_text=True))
+    job = wait(s.queue, job["id"])
+    expect("filled album files", job["state"] == "done" and job["where"] == "library", job["message"])
+    names = sorted(p.name for p in (music / job["folder"]).iterdir()) if job.get("folder") else []
+    expect("FLAC and AAC side by side", names == ["01 - Come Together.flac", "02 - Something.m4a", "03 - Oh! Darling.flac"], names)
+    tags = MP4(music / job["folder"] / "02 - Something.m4a") if names else {}
+    expect("the filled track is tagged", tags.get("\xa9alb") == ["Can't Stop"] and tags.get("trkn") == [(2, 0)], dict(tags or {}).keys())
+    expect("the message says what came from where", "1 track from YouTube (AAC)." in job["message"] and "Missing" not in job["message"]
+           and "1 video filed." in job["message"], job["message"])
+    expect("only the gap was downloaded", downloads() == ["aaaaaaaaaa5"], downloads())
+    expect("its video filed", (music / "Test Band" / "Something-video.mp4").exists())
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return 0 if all(results) else 1

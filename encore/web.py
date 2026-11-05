@@ -583,10 +583,31 @@ def youtube_track(s, album, key):
     return details, row
 
 
+def gaps_job(album, job_id):
+    """A Usenet job that's waiting with tracks missing, whose gaps can be filled from YouTube."""
+    job = find_job(job_id)
+    if job["album_id"] != album or job.get("kind") or not job.get("missing") or job["state"] != "failed" or not job.get("kept"):
+        raise Refusal(409, "That download has no missing tracks waiting to be filled")
+    return job
+
+
 @bp.get("/api/album/<album>/youtube")
 def youtube_builder(album):
+    """With ?job=, only the tracks that job's download is missing, in the edition it matched."""
     s = svc()
-    return jsonify(builder(s, s.brainz.album(checked_id(album))))
+    details = s.brainz.album(checked_id(album))
+    job_id = request.args.get("job")
+    if not job_id:
+        return jsonify(builder(s, details))
+    job = gaps_job(album, job_id)
+    draft = s.store.youtube_draft(album)
+    if draft["edition"] != job["edition_id"]:
+        s.store.save_youtube_draft(album, job["edition_id"], draft["links"])
+    built = builder(s, details)
+    keys = {m["key"] for m in job["missing"]}
+    built["fill"] = {"job": job["id"], "have": len(built["tracks"]) - len(keys)}
+    built["tracks"] = [t for t in built["tracks"] if t["key"] in keys]
+    return jsonify(built)
 
 
 @bp.post("/api/album/<album>/youtube/edition")
@@ -705,6 +726,30 @@ def retry_job(job_id):
 
 @bp.post("/api/queue/<job_id>/partial")
 def partial_job(job_id):
+    find_job(job_id).pop("fill", None)
+    return retry(job_id, partial=True)
+
+
+@bp.post("/api/queue/<job_id>/fill")
+def fill_job(job_id):
+    """Runs the job again on the download it kept, with its missing tracks fetched from YouTube."""
+    s = svc()
+    job = find_job(job_id)
+    gaps_job(job["album_id"], job_id)
+    draft = s.store.youtube_draft(job["album_id"])
+    if draft["edition"] != job["edition_id"]:
+        raise Refusal(409, "Open Fill from YouTube on this download again")
+    tracks = []
+    for gap in job["missing"]:
+        cached = s.store.youtube_video(draft["links"].get(gap["key"]) or "")
+        if cached:
+            video = cached["video"]
+            tracks.append({**{k: gap[k] for k in ("key", "disc", "number", "title")}, "video": video["id"],
+                           "seconds": video["seconds"], "channel": video["channel"]})
+    if not tracks:
+        raise Refusal(409, "Add a link for at least one missing track first")
+    with s.queue.lock:
+        job["fill"] = tracks
     return retry(job_id, partial=True)
 
 

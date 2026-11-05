@@ -193,7 +193,7 @@ function renderDetail(force = false) {
       ownedNote(album),
       el('div', { class: 'row actions' }, wantButton(album),
         detail.data && !detail.error ? switchView : null,
-        album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true, detail.view)) : null),
+        album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true, detail.view, detail.fillJob)) : null),
       album.saved_at ? el('div', { class: 'small faint' }, `Saved ${ago(album.saved_at)}`) : null))];
   if (detail.error) body.push(note(detail.error, 'bad'));
   else if (!detail.data) body.push(note('Loading tracks…'));
@@ -204,8 +204,8 @@ function renderDetail(force = false) {
     el('div', { class: 'detail' }, ...body));
 }
 
-async function openAlbum(album, refresh = false, startIn = 'album') {
-  detail = { summary: album, view: startIn };
+async function openAlbum(album, refresh = false, startIn = 'album', fillJob = null) {
+  detail = { summary: album, view: startIn, fillJob };
   confirming = null;
   const opened = detail;
   renderDetail(true);
@@ -234,6 +234,7 @@ async function loadDownloads(opened, album) {
 
 function showAlbumView(album) {
   detail.view = 'album';
+  detail.fillJob = null;
   detail.filling = false;
   renderDetail(true);
   if (!detail.downloadsAsked) loadDownloads(detail, album);
@@ -254,7 +255,8 @@ function openYoutube(album) {
 async function loadYoutube(album) {
   const opened = detail;
   Object.assign(opened, { ytBusy: opened.ytBusy || {}, ytErrors: opened.ytErrors || {}, ytTyped: opened.ytTyped || {}, found: opened.found || {} });
-  try { opened.yt = await api(`/api/album/${album.id}/youtube`); } catch (error) { opened.ytError = error.message; }
+  const only = opened.fillJob ? `?job=${opened.fillJob}` : '';
+  try { opened.yt = await api(`/api/album/${album.id}/youtube${only}`); } catch (error) { opened.ytError = error.message; }
   if (detail === opened) renderDetail(true);
 }
 
@@ -322,22 +324,26 @@ function youtubeRow(album, track) {
 
 function youtubeBar(album) {
   const yt = detail.yt, linked = yt.tracks.filter(t => t.video).length, job = activeJob(album.id);
-  const edition = yt.editions.length > 1 ? el('select', { class: 'input yt-edition', 'aria-label': 'Edition' },
+  const edition = yt.editions.length > 1 && !yt.fill ? el('select', { class: 'input yt-edition', 'aria-label': 'Edition' },
     ...yt.editions.map(e => el('option', { value: e.id, selected: e.id === yt.edition || undefined }, e.label))) : null;
   if (edition) edition.onchange = () => changeEdition(album, edition.value, edition);
   const fill = btn(detail.filling ? 'Stop' : 'Fill all', () => fillAll(album), 'ghost',
     { disabled: (!detail.filling && linked === yt.tracks.length) || undefined });
-  const queue = btn(job ? (job.state === 'done' ? 'Done' : 'In the queue') : 'Queue', event => queueYoutube(album, event.currentTarget), 'primary',
-    { disabled: !!job || !linked || detail.filling || undefined });
+  const queue = yt.fill
+    ? btn('Fill and file', event => fillGaps(album, event.currentTarget), 'primary', { disabled: !linked || detail.filling || undefined })
+    : btn(job ? (job.state === 'done' ? 'Done' : 'In the queue') : 'Queue', event => queueYoutube(album, event.currentTarget), 'primary',
+      { disabled: !!job || !linked || detail.filling || undefined });
   return el('div', { class: 'yt-bar' }, edition,
     el('span', { class: 'small muted tabular yt-count' }, `${linked} of ${plural(yt.tracks.length, 'track')} linked`),
     el('div', { class: 'row actions' }, fill, queue));
 }
 
 function youtubeBlock(album) {
-  const head = el('h3', { class: 'h2' }, 'Build from YouTube');
-  const intro = el('p', { class: 'small muted yt-intro' },
-    "Paste a link for each track, or let Encore find them. The sound becomes the album, as YouTube has it (AAC), and each video is filed with the artist's music videos.");
+  const fill = detail.yt && detail.yt.fill, gaps = fill ? detail.yt.tracks.length : 0;
+  const head = el('h3', { class: 'h2' }, fill ? 'Fill the gaps from YouTube' : 'Build from YouTube');
+  const intro = el('p', { class: 'small muted yt-intro' }, fill
+    ? `${plural(gaps, 'track')} didn't come with the download. Find ${gaps === 1 ? 'it' : 'them'} on YouTube and Encore files ${gaps === 1 ? 'it' : 'them'} with the other ${fill.have}, as AAC beside the FLAC. Videos go with the artist's music videos.`
+    : "Paste a link for each track, or let Encore find them. The sound becomes the album, as YouTube has it (AAC), and each video is filed with the artist's music videos.");
   if (detail.ytError) return el('section', { class: 'detail-section yt-builder' }, head, note(detail.ytError, 'bad'));
   if (!detail.yt) return el('section', { class: 'detail-section yt-builder' }, head, note('Loading tracks…'));
   const rows = [];
@@ -448,6 +454,18 @@ async function changeEdition(album, edition, select) {
   if (detail === opened) renderDetail(true);
 }
 
+async function fillGaps(album, button) {
+  const tracks = detail.yt.tracks, linked = tracks.filter(t => t.video), blank = tracks.length - linked.length;
+  if (blank && !(await window.duConfirm(button, `${plural(blank, 'track')} still ${blank === 1 ? 'has' : 'have'} no link. File the album without ${blank === 1 ? 'it' : 'them'}?`, 'File without them'))) return;
+  const off = linked.filter(t => t.video.fit === 'off').length;
+  if (off && !(await window.duConfirm(button, `${plural(off, 'video')} ${off === 1 ? 'is' : 'are'} very different in length from the album. Use ${off === 1 ? 'it' : 'them'} anyway?`, 'Use anyway'))) return;
+  const done = await busy(button, () => api(`/api/queue/${detail.fillJob}/fill`, { method: 'POST' }));
+  if (done === undefined) return;
+  toast(`${album.title} is back in the queue with ${plural(linked.length, 'track')} from YouTube.`);
+  $('detail').close();
+  await refreshJobs();
+}
+
 async function queueYoutube(album, button) {
   const tracks = detail.yt.tracks, linked = tracks.filter(t => t.video), blank = tracks.length - linked.length;
   if (blank && !(await window.duConfirm(button, `${plural(blank, 'track')} ${blank === 1 ? 'has' : 'have'} no link. Queue the other ${linked.length}?`, `Queue ${plural(linked.length, 'track')}`))) return;
@@ -491,7 +509,7 @@ function jobCard(job) {
   const percent = job.state === 'downloading' ? job.percent : 100;
   let state = ['failed', 'done'].includes(job.state) ? job.message : stateText[job.state];
   if (job.state === 'downloading') {
-    if (job.kind === 'youtube') state = `${job.step || 'Downloading'} · ${Math.round(job.percent)}%`;
+    if (job.kind === 'youtube' || (job.step || '').startsWith('YouTube')) state = `${job.step || 'Downloading'} · ${Math.round(job.percent)}%`;
     else state = job.step ? `SABnzbd: ${job.step}` : `Downloading ${Math.round(job.percent)}%`;
   }
   if (job.state === 'done' && job.quality) state += ` · ${job.quality}`;
@@ -505,7 +523,12 @@ function jobCard(job) {
   if (job.state === 'failed' && (job.can_import || job.message.startsWith('Not all FLAC'))) {
     buttons.push(btn('Import anyway', event => act(`/api/queue/${job.id}/import`, 'POST', event.currentTarget)));
   }
-  if (job.state === 'failed' && job.can_partial) buttons.push(btn('Get the rest', event => act(`/api/queue/${job.id}/partial`, 'POST', event.currentTarget)));
+  if (job.state === 'failed' && job.can_partial) {
+    if (job.kind !== 'youtube' && job.missing && job.missing.length) {
+      buttons.push(btn('Fill from YouTube', () => openAlbum({ id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover }, false, 'youtube', job.id), 'primary'));
+    }
+    buttons.push(btn('Get the rest', event => act(`/api/queue/${job.id}/partial`, 'POST', event.currentTarget)));
+  }
   if (!['filing', 'scanning'].includes(job.state)) {
     buttons.push(btn(running ? 'Cancel' : job.state === 'queued' ? 'Remove' : 'Clear', event => act(`/api/queue/${job.id}`, 'DELETE', event.currentTarget)));
   }

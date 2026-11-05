@@ -296,7 +296,9 @@ class Queue:
             except NotFlac as error:
                 self.update(job, state="failed", message=str(error), can_import=True, kept=True)
             except TrackFailed as error:
-                self.update(job, state="failed", message=str(error), kept=True)
+                # Filling a Usenet album's gaps: the download is kept, so it can be filled again or filed without them.
+                gaps = job.get("kind") != "youtube" and bool(job.get("missing"))
+                self.update(job, state="failed", message=str(error), kept=True, can_partial=gaps)
             except JobFailed as error:
                 self.update(job, state="failed", message=str(error))
             except Exception:
@@ -309,7 +311,7 @@ class Queue:
                 self.running = None
 
     def result(self, job, message):
-        notes = [job.get("partial_note"), job.get("edition_note"), job.get("video_note")]
+        notes = [job.get("partial_note"), job.get("fill_note"), job.get("edition_note"), job.get("video_note")]
         return " ".join([message, *filter(None, notes)])
 
     def finish(self, job):
@@ -343,8 +345,9 @@ class Queue:
             if job.get("kind") == "video":
                 shown = self.video_in_plex(job)
             else:
-                # A YouTube album's videos sit in the artist folder, so that's what Plex scans.
-                self.plex.scan(job["folder"].split("/")[0] if job.get("kind") == "youtube" else job["folder"])
+                # Videos from YouTube sit in the artist folder, so then that's what Plex scans.
+                videos = job.get("kind") == "youtube" or job.get("videos_filed")
+                self.plex.scan(job["folder"].split("/")[0] if videos else job["folder"])
                 shown = self.plex.confirm(job["artist"], job["folder"], job["tracks"])
             message = "In your library and Plex." if shown else "In your library, but Plex hasn't shown it yet."
         except Exception as error:
@@ -364,7 +367,7 @@ class Queue:
     def process_job(self, job):
         with self.lock:
             job["kept"] = False
-            for key in ("partial_note", "edition_note", "video_note", "videos_filed", "can_partial", "can_import"):
+            for key in ("partial_note", "fill_note", "edition_note", "video_note", "videos_filed", "can_partial", "can_import"):
                 job.pop(key, None)
         self.update(job, state="downloading", message="")
         if job.get("kind") == "youtube":
@@ -388,8 +391,50 @@ class Queue:
         self.update(job, state="verifying", message="Checking every track.")
         hold = prepare(source, album, job)
         self.check_cancel(job)
-        self.update(job, state="filing", message="Filing the album.")
-        self.update(job, **file_album(source, job["id"], self.library, hold))
+        filled = self.fill_gaps(job, source, album) if job.get("fill") and job.get("missing") else None
+        try:
+            self.check_cancel(job)
+            self.update(job, state="filing", message="Filing the album.")
+            self.update(job, **file_album(source, job["id"], self.library, hold))
+        except BaseException:
+            for path in filled["added"] if filled else ():
+                path.unlink(missing_ok=True)           # or the next try would find tracks that aren't FLAC
+            raise
+        if filled:
+            self.file_videos(job, album, filled["tracks"], filled["listed"], filled["videos"])
+
+    def fill_gaps(self, job, source, album):
+        """Fetches a Usenet album's missing tracks from YouTube and adds them, tagged, beside the rest.
+        The videos wait in a hidden folder of the download; the sound goes in as .m4a."""
+        missing = {m["key"]: m for m in job["missing"]}
+        tracks = [t for t in job["fill"] if t["key"] in missing]
+        if not tracks:
+            return None
+        edition = next((e for e in album["editions"] if e["id"] == job["edition_id"]), None)
+        if not edition:
+            raise JobFailed("That edition has gone from MusicBrainz. Open the album and fill it again.")
+        listed = {(t["disc"], t["number"]): t for t in edition["tracks"]}
+        self.update(job, state="downloading", message="Fetching the missing tracks from YouTube.", percent=0)
+        videos = self.fetch_videos(job, tracks, source / ".encore-youtube", "YouTube track")
+        self.update(job, state="verifying", message="Checking every track.", step="")
+        added, pairs = [], []
+        try:
+            for track in tracks:
+                target = source / f"youtube-{track['disc']}-{track['number']:03d}.m4a"
+                youtube_audio(videos[track["key"]], target, track_label(track), track.get("seconds"))
+                added.append(target)
+                pairs.append(({"path": target}, listed[(track["disc"], track["number"])]))
+            write_tags(pairs, album, edition, job["fix_artist"])
+        except BaseException:
+            for path in added:
+                path.unlink(missing_ok=True)
+            raise
+        filled = {t["key"] for t in tracks}
+        left = [m["title"] for key, m in missing.items() if key not in filled]
+        job["partial_note"] = f"Missing {and_more(left)}." if left else None
+        job["fill_note"] = f"{count(len(tracks))} from YouTube (AAC)."
+        job["tracks"] = job["tracks"] + len(tracks)
+        return {"added": added, "tracks": tracks, "listed": listed, "videos": videos}
 
     def process_youtube(self, job):
         album = self.brainz.album(job["album_id"])
@@ -436,13 +481,13 @@ class Queue:
         self.update(job, **file_album(album_dir, job["id"], self.library))
         self.file_videos(job, album, tracks, listed, videos)
 
-    def fetch_videos(self, job, tracks, folder):
+    def fetch_videos(self, job, tracks, folder, label="Track"):
         """Downloads each track's video, skipping any already here from an earlier try."""
         videos = {}
         for place, track in enumerate(tracks):
             self.check_cancel(job)
             share = 100 / len(tracks)
-            self.update(job, step=f"Track {place + 1} of {len(tracks)}", percent=round(place * share, 1))
+            self.update(job, step=f"{label} {place + 1} of {len(tracks)}", percent=round(place * share, 1))
             path = folder / f"{track['video']}.mp4"
             if not path.exists():
                 shown = [0.0]
@@ -480,7 +525,7 @@ class Queue:
                 there += 1
         parts = [f"{len(filed)} video{'' if len(filed) == 1 else 's'} filed" if filed else "",
                  f"{there} already there" if there else "",
-                 f"{still} audio only" if still else ""]
+                 f"no video from {still} audio-only upload{'' if still == 1 else 's'}" if still else ""]
         note = ", ".join(p for p in parts if p)
         self.update(job, videos_filed=filed, video_note=f"{note[0].upper()}{note[1:]}." if note else "")
 
@@ -620,6 +665,10 @@ def prepare(folder, album, job):
     if len(fit["pairs"]) < max(1, wanted * 0.6):
         raise JobFailed(f"This isn't the album: only {len(fit['pairs'])} of {wanted} tracks match. Try another release.")
     gone = [t["title"] for t in fit["missing"]]
+    # Which tracks didn't arrive, and of which edition, so the page can offer to fill them from YouTube.
+    job["edition_id"] = edition["id"]
+    job["missing"] = [{"key": f"{t['disc']}-{t['number']}", "disc": t["disc"], "number": t["number"], "title": t["title"],
+                       "seconds": t["seconds"]} for t in fit["missing"]]
     hold = None
     if fit["extra"] and not gone:
         hold = f"It has {count(len(fit['extra']))} no MusicBrainz edition lists, so it's here for you to file."

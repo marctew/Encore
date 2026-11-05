@@ -54,6 +54,8 @@ When Usenet doesn't have an album, open it and press **Build from YouTube**. Pas
 
 Each video is downloaded once, at up to 1080p. Its sound is copied out without re-encoding to make the album: AAC at about 128 kbps, so lossy. The album is tagged from MusicBrainz, given its cover, and filed like any other, and the queue and Library show it as `YouTube AAC`. Each video goes in the artist's folder as `Song-video.mp4`, where Plex shows it as a music video. Uploads from YouTube's auto-generated "Artist - Topic" channels are the album audio over a still, so no video is filed for those.
 
+When a Usenet download arrives with tracks missing, its job in the queue offers **Fill from YouTube** beside **Get the rest**. It opens the same builder with only the missing tracks, and **Fill and file** runs the job again on the download Encore kept, adding those tracks from YouTube. The album is filed together, FLAC with a few AAC tracks, and the queue says how many came from YouTube, so you know which albums to upgrade later.
+
 YouTube changes often, and old versions of yt-dlp stop working. `scripts/update.sh` upgrades yt-dlp every time it runs, and **Settings** has an **Update yt-dlp** button.
 
 ## Password

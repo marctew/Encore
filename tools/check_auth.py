@@ -54,7 +54,7 @@ def main():
     expect("page goes to login", response.status_code == 302 and response.headers["Location"] == "/login")
     status, _ = post(client, "/api/settings/test")
     expect("posts blocked", status == 401)
-    for path in ("/api/youtube/update", "/api/queue/youtube", f"{album}/youtube/link", f"{album}/youtube/find", f"{album}/youtube/edition"):
+    for path in ("/api/youtube/update", "/api/queue/youtube", "/api/queue/abc123/fill", f"{album}/youtube/link", f"{album}/youtube/find", f"{album}/youtube/edition"):
         status, _ = post(client, path, {"album_id": album[-36:], "key": "1-1", "url": "aaaaaaaaaa1"})
         expect(f"blocked POST {path}", status == 401, status)
         status, _ = post(client, path, {}, headers={})
