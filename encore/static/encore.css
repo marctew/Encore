@@ -213,7 +213,11 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
   .encore-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; }
   /* Full screen on a phone, and as a home screen app the page runs under the status bar and the home
      indicator: keep the close button and the content clear of both. */
-  .dialog-close { top: calc(12px + env(safe-area-inset-top)); margin-top: calc(12px + env(safe-area-inset-top)); }
+  /* A strip the height of the status bar, pinned to the top of the window: everything starts below it,
+     and whatever scrolls up goes behind it rather than behind the clock. */
+  .encore-dialog::before { content: ""; display: block; position: sticky; top: 0; z-index: 3;
+    height: env(safe-area-inset-top); background: rgb(var(--surface)); }
+  .dialog-close { top: calc(12px + env(safe-area-inset-top)); }
   .detail { padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
   .detail-head { grid-template-columns: minmax(0, 1fr); }
   .detail-head .thumb { max-width: 220px; }
