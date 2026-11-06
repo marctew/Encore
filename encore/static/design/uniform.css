@@ -260,9 +260,11 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .confirm {
   position: absolute; right: 0; top: 100%; z-index: 30; margin-top: 8px; width: 288px; max-width: calc(100vw - 32px); padding: 16px;
   border-radius: var(--r-lg); border: 1px solid rgb(var(--border)); background: rgb(var(--surface)); box-shadow: var(--shadow-pop);
-  font-size: 14px; font-weight: 400; line-height: 20px; text-align: left; color: rgb(var(--text));
+  font-size: 14px; font-weight: 400; line-height: 20px; text-align: left; color: rgb(var(--text)); white-space: normal;
 }
 .confirm.left { left: 0; right: auto; }
+/* Placed by duPlace() (js/confirm.js): over the page, above the button, so scrolling boxes never clip it. */
+.confirm.is-placed { position: fixed; right: auto; margin: 0; z-index: 60; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 /* --------------------------------------------------- progress and bars */

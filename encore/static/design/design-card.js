@@ -73,6 +73,7 @@
       var btns = pop.querySelectorAll("button");
       btns[1].textContent = yes;
       wrap.appendChild(pop);
+      if (window.duPlace) window.duPlace(pop, button);      // over the page, above the button (js/confirm.js)
       button.setAttribute("aria-expanded", "true");
       function close() {
         pop.remove(); button.setAttribute("aria-expanded", "false");

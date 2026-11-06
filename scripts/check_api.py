@@ -39,8 +39,8 @@ def get(path, token=tok, headers=None, url_token=False, read=True):
     try:
         r = urllib.request.urlopen(req, timeout=15)
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read()
-    return r.status, dict(r.headers), (r.read() if read else r)
+        return e.code, e.headers, e.read()      # HTTPMessage: case-insensitive, as Cloudflare sends lower case
+    return r.status, r.headers, (r.read() if read else r)
 
 
 def check(name, ok, detail=""):

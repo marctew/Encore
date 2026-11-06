@@ -54,6 +54,8 @@ Readers send `Accept: application/json` (except for images, events and display p
 
 - **LAN by default (decided).** `/api/v1/`, `/display/` and `/healthz` answer on the app's LAN address.
 - **Through the tunnel only per app, by Marc's choice (decided).** If an app's hostname is on the Cloudflare tunnel, its `/api/v1/` works there too, always with a token. An app can switch that off with `API_PUBLIC=0` in its env, which makes it refuse `/api/v1/` and `/display/` requests that came through the proxy (`CF-Connecting-IP` present) with `403`.
+- **Through the tunnel, readers aren't browsers, so Cloudflare needs a rule (6 Nov 2026).** Browser Integrity Check is on for the whole `marctew.co.uk` zone, and it refuses anything that doesn't look like a browser (TRMNL, Home Assistant away from home, scripts, `check_api.py`) with `403` and `error code: 1010`, before the app sees the request. So every app whose API goes through the tunnel gets a **Configuration Rule** in the zone (Rules → Configuration Rules): when `http.host eq "<app>.marctew.co.uk" and (starts_with(http.request.uri.path, "/api/v1/") or starts_with(http.request.uri.path, "/display/"))`, set Browser Integrity Check **off**. Nothing else changes: the rest of the app keeps the check, and the API keeps its tokens. Encore and Binge Stats have one. Check from outside with `scripts/check_api.py https://<app>.marctew.co.uk <read token>`.
+- **Header names arrive in lower case through Cloudflare** (`etag`, `referrer-policy`), so readers look headers up case-insensitively. `check_api.py` does from v1.15; before that it reported a missing ETag and Referrer-Policy through the tunnel that were really there.
 - **No CORS by default.** Browser readers on another origin go through a server (Vital Signs' data proxy). An app may list allowed origins in Settings if one is ever needed.
 
 ## 5. Common shapes
@@ -311,8 +313,9 @@ One app at a time, like the design system. **Binge Stats goes first, as the pilo
 1. **Done, 5–6 Nov 2026: Binge Stats built the standard in-app,** to its own plan (`docs/specs/api-standard.md` in its repo), in six stages: the shared core with `meta` and `status`, then feeds and images, actions, events and webhooks, the `now-playing` display page, and docs with checking. Its current endpoints stayed exactly as they were (section 1). What was checked against the live server, including a 5½-minute events stream through the Cloudflare tunnel, is in its `docs/verification.md`.
 2. **Done in v1.10: the shared code lifted** into this repo (`du_api.py`, the API tokens and webhooks cards, the display shell, `check_api.py`), with what the pilot found written in (section 17). Binge takes the shared copies through the design updater.
 3. **Docket:** `status` (due today, overdue, the night shift), feeds (`today`, `upcoming`, `reports`), actions (`add_task`, `complete_task`, and `notify` limited to 10 an hour), **inbound items** (tasks with a reminder, for Muddy Paws first), events (`task.due`, `task.done`, `task.reopened`, `brief.published`, `watch.fired`, `approval.requested`). Then its reader side (section 13), which is step 8. Muddy Paws' own brief for this (`docket-inbound-api.md`) maps onto draft 4 as: its `/api/inbound/items/<key>` routes become `/api/v1/inbound/items/<key>`, its `notify` becomes the `notify` action, its Connected apps card becomes app tokens on the API tokens card, and its Done callback becomes a webhook filtered to Muddy Paws' items.
-4. **Encore** (downloads), **PodBridge** (new episodes, sync state), **Vital Signs** (its own status), **The Back Room** (status only, LAN only, unless Marc wants more).
-5. claude-ops is deployed only by Marc and keeps its own API; it isn't part of this unless he says so.
+4. **Done, 6 Nov 2026: Encore** (downloads): status; feeds `downloads`, `arrivals`, `failed` and `wanted`; cover and artist images; actions `want_album`, `get_album` (30 an hour), `retry_job` and `search_wanted` (4 an hour); events `job.queued`, `download.started`, `download.finished`, `download.failed` and `wanted.added`; webhooks; the `downloads` display page. Documented in its repo's `docs/API.md`, checked by its `tools/check_api_encore.py` and by `check_api.py` on the LAN and through the tunnel. What it found is in section 20.
+5. **Next:** **PodBridge** (new episodes, sync state), **Vital Signs** (its own status), **The Back Room** (status only, LAN only, unless Marc wants more).
+6. claude-ops is deployed only by Marc and keeps its own API; it isn't part of this unless he says so.
 
 ## 15. Open questions
 
@@ -368,4 +371,15 @@ Binge runs draft 3 on the v1.10 shared code. **It doesn't have to change anythin
 | Events with `source` | **No.** Only events about inbound items carry it, so Binge's `events` table needs no `source_app` column. The webhooks card hides **Only items from** unless `webhook_sources` is passed. |
 | v1.11 shared code | **Check, don't change.** When the updater brings v1.11 in, `du_api.py`, both cards and `check_api.py` are replaced. Run Binge's test suite and `scripts/check_api.py` against it once it's live, the same as after v1.10. Nothing in Binge's `init_api(...)` call needs to change. |
 | Docs | **A one-line fix.** `docs/API.md` still says "draft 2" at the top. Make it "draft 4". |
+
+## 20. What Encore found (6 Nov 2026)
+
+Encore is the first app to take the shared code (v1.10 to v1.14) without having been the pilot. All of it fitted; these are what the next apps should know:
+
+1. **Cloudflare's Browser Integrity Check blocks the API through the tunnel** (`403`, `error code: 1010`) until the app's hostname has the Configuration Rule in section 4. Binge Stats was blocked the same way and has the rule too.
+2. **Header names arrive in lower case through Cloudflare**, which made `check_api.py` (before v1.15) report a missing `ETag` and `Referrer-Policy` that were there. Readers look headers up case-insensitively.
+3. **The API tokens and Webhooks cards are plain HTML forms.** An app whose CSRF defence is a custom header on its own page's requests (Encore's `X-Encore: 1`) can't take those posts as they are: give it a real `csrf_token()`, tied to the session (Encore uses an HMAC of the session cookie with a key in its data folder), and accept it as the cards' `csrf_token` form field and as `X-CSRF-Token` (the Design system card). A fixed value there would be no defence at all.
+4. **The login check must step aside for `/api/v1/` and `/display/`**, or token readers get the app's own `401`. `du_api` checks those paths itself; nothing else may skip the login.
+5. **Feeds that should outlive the app's own lists need a table of their own.** Encore's queue can be cleared, so `arrivals` comes from a table its queue writes to whenever a job is filed, not from the queue.
+6. **Events from a background thread** (Encore's queue) need the app's public address for item `url`s. Encore remembers the address from real requests, since a thread has no request of its own.
 

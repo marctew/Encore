@@ -280,7 +280,7 @@ Keep the text to one or two words. Add a dot or glyph only when the badge stands
 | **Toast** | The result of an action you just took ("Moved. It's High priority now…", "Can't reach the Pi in the garage") | Bottom centre on phones, above the bottom nav. Bottom right on desktop. Fades out after about 4.5 s. |
 | **Flash** | The result of a full-page form post | Top of `<main>`, success or danger tint |
 
-There are no modal alerts, and never `window.confirm()`. A destructive action asks first with the `confirm_button` macro: an inline popover by the button with the question, **Cancel** and a danger button naming the action ("Delete this channel? Nothing more is sent to it." / Cancel / Delete channel). It closes on Cancel, Escape or a click outside. Use a modal only for a confirm that needs a lot of reading, and keep it rare. Apps without Alpine put `data-confirm="Question?"` on the form (or on one button) and load `js/confirm.js`, which shows the same popover; the danger button repeats the submit button's label unless `data-confirm-yes` says otherwise. In a click handler, `if (!(await duConfirm(button, question, yes))) return;` does the same.
+There are no modal alerts, and never `window.confirm()`. A destructive action asks first with the `confirm_button` macro: an inline popover by the button with the question, **Cancel** and a danger button naming the action ("Delete this channel? Nothing more is sent to it." / Cancel / Delete channel). It closes on Cancel, Escape or a click outside. The popover floats over the page, **above the button** (below it only when there's no room above), and follows it as the page scrolls. So a scrolling table or card never clips it, gains a scrollbar or jumps to make room. `js/confirm.js` places it (`duPlace(pop, button)`), for the macro too, so Alpine apps load `js/confirm.js` as well. Use a modal only for a confirm that needs a lot of reading, and keep it rare. Apps without Alpine put `data-confirm="Question?"` on the form (or on one button) and load `js/confirm.js`, which shows the same popover; the danger button repeats the submit button's label unless `data-confirm-yes` says otherwise. In a click handler, `if (!(await duConfirm(button, question, yes))) return;` does the same.
 
 ### 7.11 Empty states (`empty_state`)
 
@@ -382,7 +382,7 @@ From Binge Stats (its dashboard's "Airing this week" row). A row that scrolls si
 
 ## 9. Glyphs
 
-There are 69 glyphs in `glyphs/`. Binge Stats' set is the core; the rest were added for other apps in the same hand.
+There are 73 glyphs in `glyphs/`. Binge Stats' set is the core; the rest were added for other apps in the same hand.
 
 ### 9.1 Drawing rules: every glyph, no exceptions
 
@@ -420,6 +420,7 @@ There are 69 glyphs in `glyphs/`. Binge Stats' set is the core; the rest were ad
 | Media and playback | `play` `pause` `stop` `tv` `film` `image` `music` |
 | Devices and network | `device` `monitor` `server` `chip` `lan` `wan` `headset` |
 | Maps and outdoors | `map` `route` `pin` `paw` |
+| Weather | `sun` `cloud` `rain` `wind` `thermometer` |
 | Theme | `sun` `moon` `monitor` |
 | App-specific, don't reuse | `plex` (the Plex mark), `home-assistant` |
 
@@ -645,4 +646,7 @@ health = "http://127.0.0.1:8765/healthz" # anything below 500 counts as up
 | 2026-11-05 | The `map`, `route`, `pin` and `paw` glyphs, in a new Maps and outdoors group (9.3, 9.4). The 9.3 table now also lists `star`, `tag`, `image` and `headset`. | – |
 | 2026-11-05 | From Muddy Paws: the map component (7.16) and Google Maps as the one stated exception to no CDNs at runtime (17.6). Map markers' white ring and initial are allowed hard-coded colours (13). `APP-STANDARD.md` gains apps with more than one person (9), ingest endpoints with their own tokens (10) and secrets an admin enters in Settings (11). Docs only. | Muddy Paws (source) |
 | 2026-11-06 | The outside API's shared code, lifted from Binge Stats' pilot: `tools/du_api.py`, `templates/display/base.html`, the API tokens and Webhooks cards for Settings, and `tools/check_api.py`. `API-STANDARD.md` draft 3. Apps that adopt the API add six lines to their updater config (API-STANDARD 12). | Binge Stats (source) |
+| 2026-11-06 | Four weather glyphs (9.3), for Muddy Paws' weather: `cloud`, `rain`, `wind`, `thermometer`, in a new Weather group with `sun`. | Muddy Paws (source) |
+| 2026-11-06 | Inline confirms (7.10) float above the button, over the page, instead of opening inside it, so a confirm in a scrolling table no longer clips or scrolls the table. The popover's text wraps even inside a `nowrap` cell. `js/confirm.js` gains `duPlace()`, which the `confirm_button` macro and `design-card.js` use. | Muddy Paws (source) |
 | 2026-11-06 | The scroll fade (7.17), from Binge Stats: `scroll-fade` in both CSS files and `js/scroll-fade.js`, so a sideways row fades at the edge where there's more to scroll instead of cutting a card off. | Binge Stats (source) |
+| 2026-11-06 | `API-STANDARD.md`: Encore has the API (14), with what it found (20). Through the tunnel, Cloudflare's Browser Integrity Check blocks API readers until the app's hostname has a Configuration Rule turning it off for `/api/v1/` and `/display/` (4); Encore and Binge Stats have one. `tools/check_api.py` looks headers up case-insensitively, since Cloudflare sends them in lower case. | Encore (source) |
