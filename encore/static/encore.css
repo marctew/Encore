@@ -238,3 +238,27 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .report li + li { margin-top: 4px; }
 .report .fine { color: rgb(var(--success)); }
 .report .bad { color: rgb(var(--danger)); }
+
+/* ------------------------------------------------- the downloads display page (/display/downloads) */
+.dl-display { display: flex; flex-direction: column; gap: 2.5vmin; height: 100%; }
+.dl-head .eyebrow { color: rgb(var(--accent)); }
+.dl-headline { margin: .25rem 0 0; font-size: 2rem; line-height: 1.2; font-weight: 600; }
+.tone-warning .dl-headline { color: rgb(var(--warning)); }
+.tone-error .dl-headline { color: rgb(var(--danger)); }
+.dl-now { display: grid; gap: 2vmin; }
+.dl-job { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 1.25rem; align-items: center; }
+.dl-job-body { display: grid; gap: .3rem; min-width: 0; }
+.dl-title { font-size: 1.35rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-job .progress-track { margin-top: .35rem; }
+.dl-quiet { margin: 0; font-size: 1.25rem; }
+.dl-lower { display: flex; gap: 3vmin; min-height: 0; }
+.dl-next { flex: 1 1 0; min-width: 0; }
+.dl-arrived { flex: 2 1 0; min-width: 0; }
+.dl-next ol { margin: .5rem 0 0; padding-left: 1.25rem; display: grid; gap: .35rem; }
+.dl-next-title { font-weight: 500; }
+.dl-arrived-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 9rem)); gap: 1rem; margin-top: .5rem; }
+.dl-arrival { display: grid; gap: .25rem; min-width: 0; align-content: start; }
+.dl-arrival .muted, .dl-arrival .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-arrival-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-aspect-ratio: 1/1) { .dl-lower { flex-direction: column; } }

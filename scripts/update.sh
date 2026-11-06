@@ -58,6 +58,12 @@ fi
 as_owner venv/bin/pip install -q -U "yt-dlp[default]" deno \
     || echo "Couldn't update yt-dlp; carrying on with the one installed." >&2
 
+# The API's image cache (docs/API.md), made once, owned by whoever the service runs as.
+RUN_AS="$(systemctl show "$SERVICE" -p User --value 2>/dev/null)"
+if [ ! -d /var/cache/encore ]; then
+    as_root install -d -o "${RUN_AS:-$owner}" -m 755 /var/cache/encore
+fi
+
 as_owner venv/bin/python -m compileall -q encore wsgi.py >/dev/null \
     || { echo "The code doesn't compile; not restarting." >&2; exit 1; }
 

@@ -4,3 +4,4 @@ mutagen==1.48.1
 requests>=2.32
 yt-dlp[default]
 deno
+Pillow>=10

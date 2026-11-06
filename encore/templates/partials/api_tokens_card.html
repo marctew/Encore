@@ -1,0 +1,89 @@
+{#- Design Uniformity: Settings → API tokens (API-STANDARD.md section 3). Carried into apps by the
+    design updater: don't edit it in an app. Goes after the app's own settings, before Webhooks and
+    the Design system card. Component classes only, so it works with uniform.css and Tailwind alike.
+
+    {% include "partials/api_tokens_card.html" %} with these set:
+      api_tokens     [{id, name, scope ("read"|"write"), last_used ("2h ago", or None)}]
+      api_token_new  {token, name} straight after one is made (render it in that response only), else None
+      api_urls       {"create": URL, "revoke": URL with {id}}: POST forms, with csrf_token() if the app has one
+      api_displays   [{title, url}] the app's display pages, for previewing; [] if none
+      api_actions    [{action, message, token_name, when ("5m ago"), ok (bool)}] the action log's latest; [] if none
+      api_tokens_apps  optional, True if the app keeps other apps' inbound items (API standard draft 4): the form
+                       gets a "Belongs to an app" field (posted as `app`; a write token is made when it's filled in)
+                       and each token shows its app (t.app). Leave it unset and nothing changes.
+    Revoke asks first with js/confirm.js (spec 7.10) if the page loads it; without it, it just submits. -#}
+<section id="api" class="card card-pad stack" data-api-tokens>
+  <h2 class="h2">API tokens</h2>
+  <p class="small muted">For displays, Docket, Home Assistant and scripts that read <code>/api/v1</code>.{% if api_tokens_apps %} An app
+    that keeps its own items here (reminders from Muddy Paws, say) gets a token that belongs to it: only that app sees
+    those items.{% endif %} Send
+    <code>Authorization: Bearer &lt;token&gt;</code>; a display that can't set a header can put a read-only token in the
+    URL as <code>?token=</code>. Write tokens only work in the header. Give each screen or script its own token, so it can be
+    revoked alone.</p>
+  {% if api_token_new %}
+  <div class="banner banner-success" role="status">
+    <div class="stack">
+      <div>Token for {{ api_token_new.name }}. Copy it now: it won't be shown again.</div>
+      <div class="row">
+        <input class="input" readonly value="{{ api_token_new.token }}" onfocus="this.select()" style="flex:1;min-width:0;font-family:ui-monospace,monospace">
+        <button type="button" class="btn btn-ghost" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Copied'">Copy</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  <form method="post" action="{{ api_urls.create }}" class="row" style="align-items:flex-end">
+    {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
+    <div style="flex:1;min-width:12rem"><label class="label" for="du-token-name">Name</label>
+      <input id="du-token-name" name="name" class="input" placeholder="Kitchen display" required maxlength="60"></div>
+    <div><label class="label" for="du-token-scope">Access</label>
+      <select id="du-token-scope" name="scope" class="input"><option value="read">Read only</option><option value="write">Read and write</option></select></div>
+    {% if api_tokens_apps %}
+    <div style="flex:1;min-width:10rem"><label class="label" for="du-token-app">Belongs to an app (optional)</label>
+      <input id="du-token-app" name="app" class="input" placeholder="muddy-paws" maxlength="40" pattern="[a-z0-9][a-z0-9-]*"
+             title="Lower case, digits and hyphens: the app's short name"></div>
+    {% endif %}
+    <button class="btn btn-primary">Create</button>
+  </form>
+  <div>
+  <h3 class="label">Tokens</h3>
+  {% if api_tokens %}
+  <ul class="stack" style="list-style:none;margin:0;padding:0">
+    {% for t in api_tokens %}
+    <li class="row-between">
+      <span class="row"><strong>{{ t.name }}</strong>
+        <span class="badge badge-muted">{{ 'read + write' if t.scope == 'write' else 'read' }}</span>
+        {% if t.app %}<span class="badge badge-muted" title="This app's own token: it keeps its items here">app: {{ t.app }}</span>{% endif %}
+        <span class="small muted">{{ ('used ' ~ t.last_used) if t.last_used else 'never used' }}</span></span>
+      <form method="post" action="{{ api_urls.revoke.replace('{id}', t.id | string) }}" data-confirm="Revoke {{ t.name }}? Anything using it stops working." data-confirm-yes="Revoke">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
+        <button class="btn btn-ghost" title="Revoke: anything using it stops working">Revoke</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="small muted">No tokens yet.</p>{% endif %}
+  </div>
+  {% if api_displays %}
+  <div data-display-pages>
+    <h3 class="label">Display pages</h3>
+    <p class="small muted">Full-screen pages for a kiosk, a Vital Signs screen or the widget display: add <code>?token=</code> with a
+      read token, and optionally <code>theme=light</code>, <code>size=800x480</code>, <code>scale=1.5</code>, <code>accent=teal</code>
+      or <code>static=1</code> for e-ink.</p>
+    <div class="row">{% for d in api_displays %}<a class="btn btn-ghost" href="{{ d.url }}" target="_blank" rel="noopener">Preview {{ d.title }}</a>{% endfor %}</div>
+  </div>
+  {% endif %}
+  <div>
+    <h3 class="label">Recent API actions</h3>
+    {% if api_actions %}
+    <ul class="stack" style="list-style:none;margin:0;padding:0" data-api-actions>
+      {% for a in api_actions %}
+      <li class="row-between">
+        <span class="row" style="min-width:0"><span class="badge {{ 'badge-muted' if a.ok else 'badge-danger' }}"><code>{{ a.action }}</code></span>
+          <span class="small">{{ a.message or '' }}</span></span>
+        <span class="small muted">{{ a.token_name }} · {{ a.when }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="small muted">No actions yet.</p>{% endif %}
+  </div>
+</section>

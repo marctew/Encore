@@ -44,8 +44,8 @@ if [ -d "$DIR/data" ] && [ ! -e "$DATA" ]; then
     systemctl stop encore 2>/dev/null || true
     mv "$DIR/data" "$DATA"
 fi
-mkdir -p "$DATA/photos"
-chown -R "$RUN_AS": "$DIR" "$DATA"
+mkdir -p "$DATA/photos" /var/cache/encore/images       # the API's resized covers (docs/API.md)
+chown -R "$RUN_AS": "$DIR" "$DATA" /var/cache/encore
 chmod 700 "$DATA"
 
 url="http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT"

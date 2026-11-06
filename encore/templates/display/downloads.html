@@ -1,0 +1,4 @@
+{#- Encore's downloads display page (API-STANDARD 9), on the shared shell. The body is its own template,
+    because the shell reloads it alone with ?fragment=1. -#}
+{% extends "display/base.html" %}
+{% block body %}{% include "display/downloads_body.html" %}{% endblock %}

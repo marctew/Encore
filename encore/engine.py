@@ -189,6 +189,7 @@ class Queue:
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.running = None
+        self.watchers = []           # watcher(job, old_state) on every change of state, and old_state None when added
         self.load()
 
     def load(self):
@@ -235,6 +236,7 @@ class Queue:
         with self.lock:
             self.jobs.append(job)
             self.update()
+        self.tell(job, None)
         self.wake.set()
         return job
 
@@ -247,6 +249,7 @@ class Queue:
         with self.lock:
             self.jobs.append(job)
             self.update()
+        self.tell(job, None)
         self.wake.set()
         return job
 
@@ -259,14 +262,26 @@ class Queue:
         with self.lock:
             self.jobs.append(job)
             self.update()
+        self.tell(job, None)
         self.wake.set()
         return job
 
     def update(self, job=None, **changes):
         with self.lock:
+            old = job.get("state") if job else None
             if job:
                 job.update(changes)
             self.save()
+        if job and "state" in changes and changes["state"] != old:
+            self.tell(job, old)
+
+    def tell(self, job, old):
+        """Lets watchers (the outside API's events and history) know; one failing never stops the queue."""
+        for watcher in self.watchers:
+            try:
+                watcher(dict(job), old)
+            except Exception:
+                log.exception("A queue watcher failed")
 
     def start(self):
         """Runs the queue in a daemon thread. Jobs that were scanning carry on waiting for Plex."""

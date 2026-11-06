@@ -399,10 +399,16 @@ def add_wanted():
     added = 0
     for album_id in body().get("album_ids") or []:
         album = store.album(str(album_id))
-        if album:
+        if album and album["id"] not in store.wanted_ids():
             store.want(album)
+            svc().publish("wanted.added", f"Wanted: {album['artist']} – {album['title']}", api_wanted_item(album))
             added += 1
     return jsonify(added=added)
+
+
+def api_wanted_item(album):
+    from .api import wanted_item
+    return wanted_item(album)
 
 
 @bp.delete("/api/wanted/<album>")
@@ -899,7 +905,8 @@ def favicon():
 
 @bp.get("/settings")
 def settings_view():
-    return page("settings.html", view="settings")
+    from . import api
+    return page("settings.html", view="settings", **api.settings_context())
 
 
 def disk_size(path):
@@ -961,10 +968,16 @@ def log_out_form():
 
 def guard():
     """Every change needs the page's own header, so another site can't post here, and with a
-    password on, everything but the sign-in and /healthz needs a valid session."""
-    # The shared Design system card sends X-CSRF-Token (with csrf_token() below) instead of X-Encore.
-    page_sent = request.headers.get("X-Encore") == "1" or request.headers.get("X-CSRF-Token") == "1"
-    if request.method not in ("GET", "HEAD") and not page_sent and request.path not in FORM_POSTS:
+    password on, everything but the sign-in and /healthz needs a valid session. /api/v1/ and
+    /display/ are the outside API's: du_api checks their tokens (and a session's CSRF) instead."""
+    from .api import csrf_value
+    if request.path.startswith(("/api/v1/", "/display/")):
+        return None
+    # The shared Design system card sends X-CSRF-Token, and the shared API tokens and Webhooks cards
+    # are plain forms with a csrf_token field: both carry csrf_token(), which is tied to the session.
+    page_sent = request.headers.get("X-Encore") == "1" or request.headers.get("X-CSRF-Token") == csrf_value()
+    form_sent = request.path.startswith("/settings/") and request.form.get("csrf_token") == csrf_value()
+    if request.method not in ("GET", "HEAD") and not (page_sent or form_sent) and request.path not in FORM_POSTS:
         raise Refusal(403, "Missing request header")
     auth = svc().auth
     open_path = request.path in OPEN_PATHS or request.path.startswith("/static/")
@@ -1014,8 +1027,8 @@ def create_app():
         init_design = None
     if init_design:
         init_design(app, DATA / "design", version=__version__)
-    # Not a secret: another site can't send a custom header, which is all the guard needs.
-    app.jinja_env.globals["csrf_token"] = lambda: "1"
+    from . import api
+    api.install(app, s)                    # the outside API (/api/v1/, /display/) and the real csrf_token()
     app.before_request(guard)
     app.after_request(harden)
 
@@ -1038,5 +1051,7 @@ def start_workers(app):
         return
     s.started = True
     s.queue.start()
+    from . import api
+    api.start(app)
     threading.Thread(target=plex_rhythm, args=(s,), name="encore-plex", daemon=True).start()
     threading.Thread(target=fill_albums, args=(s,), name="encore-filler", daemon=True).start()

@@ -1,0 +1,47 @@
+{#- What's downloading, what's next and what arrived, for a kiosk or a Vital Signs screen. -#}
+<div class="dl-display tone-{{ status.state }}">
+  <header class="dl-head">
+    <span class="eyebrow">Encore</span>
+    <h1 class="dl-headline">{{ status.headline }}</h1>
+  </header>
+  {% if now %}
+  <section class="dl-now">
+    {% for job in now %}
+    <div class="dl-job">
+      <div class="thumb cover dl-cover">{% if job.cover %}<img src="{{ job.cover }}" alt="" class="loaded">{% endif %}</div>
+      <div class="dl-job-body">
+        <div class="dl-title">{{ job.title }}</div>
+        <div class="muted dl-artist">{{ job.artist }}</div>
+        <div class="small muted">{{ job.text }}</div>
+        {% if job.percent is not none %}<div class="progress-track"><div class="progress-fill" style="width:{{ job.percent }}%"></div></div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+  {% else %}
+  <p class="muted dl-quiet">Nothing downloading right now.</p>
+  {% endif %}
+  <div class="dl-lower">
+    {% if next %}
+    <section class="dl-next">
+      <h2 class="eyebrow">Up next</h2>
+      <ol>{% for job in next %}<li><span class="dl-next-title">{{ job.title }}</span> <span class="muted">{{ job.artist }}</span></li>{% endfor %}</ol>
+    </section>
+    {% endif %}
+    {% if arrived %}
+    <section class="dl-arrived">
+      <h2 class="eyebrow">Just arrived</h2>
+      <div class="dl-arrived-grid">
+        {% for album in arrived %}
+        <div class="dl-arrival">
+          <div class="thumb cover">{% if album.cover %}<img src="{{ album.cover }}" alt="" class="loaded">{% endif %}</div>
+          <div class="small dl-arrival-title">{{ album.title }}</div>
+          <div class="small muted">{{ album.artist }}</div>
+          <div class="small faint">{{ album.when }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </div>
+</div>

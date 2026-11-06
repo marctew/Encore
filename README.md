@@ -9,6 +9,7 @@ It searches with several spellings, matches release titles on artist, album, siz
 - A Wanted list, and a queue you can drag to reorder
 - Music videos filed so they appear in Plex
 - Build an album from YouTube links when Usenet doesn't have it
+- An API for Home Assistant, Docket, displays and scripts, with a ready-made downloads screen
 - Optional password, and works on phones
 
 ## Install
@@ -58,6 +59,10 @@ When a Usenet download arrives with tracks missing, its job in the queue offers 
 
 YouTube changes often, and old versions of yt-dlp stop working. `scripts/update.sh` upgrades yt-dlp every time it runs, and **Settings** has an **Update yt-dlp** button.
 
+## API
+
+Encore has the homelab's standard outside API (`docs/design/API-STANDARD.md`), documented in `docs/API.md`: its status, feeds of downloads, arrivals, failures and Wanted, cover images, actions to add or get an album, live events, signed webhooks, and a `/display/downloads` screen for a kiosk or a Vital Signs panel. Make a token for each reader in **Settings → API tokens**. It works on the LAN and through the tunnel, always with a token.
+
 ## Password
 
 Encore is open to anyone on your network until you set a password in **Settings**. It runs on plain HTTP, so put it behind HTTPS before exposing it to the internet.
@@ -75,7 +80,7 @@ systemctl restart encore
 These run against fakes and throwaway folders, so they touch nothing real:
 
 ```bash
-cd /opt/encore && venv/bin/python tools/check_usenet.py && venv/bin/python tools/check_auth.py && venv/bin/python tools/check_youtube.py
+cd /opt/encore && venv/bin/python tools/check_usenet.py && venv/bin/python tools/check_auth.py && venv/bin/python tools/check_youtube.py && venv/bin/python tools/check_api_encore.py
 ```
 
 ## Updating and running

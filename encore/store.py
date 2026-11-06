@@ -20,6 +20,20 @@ CREATE TABLE IF NOT EXISTS plex_albums (rating TEXT PRIMARY KEY, artist_rating T
 CREATE TABLE IF NOT EXISTS wanted (album_id TEXT PRIMARY KEY, artist_id TEXT, data TEXT, added REAL,
     searched_at REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS facts (name TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS api_tokens (id INTEGER PRIMARY KEY, name TEXT, scope TEXT, hash TEXT UNIQUE,
+    created_at REAL, last_used_at REAL, revoked_at REAL);
+CREATE TABLE IF NOT EXISTS api_actions (id INTEGER PRIMARY KEY, at REAL, action TEXT, message TEXT, token_name TEXT, ok INTEGER);
+CREATE TABLE IF NOT EXISTS api_idempotency (token TEXT, key TEXT, at REAL, status INTEGER, body TEXT, PRIMARY KEY (token, key));
+CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, type TEXT NOT NULL, at TEXT NOT NULL, title TEXT NOT NULL,
+    item TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS events_at ON events (at);
+CREATE TABLE IF NOT EXISTS webhooks (id INTEGER PRIMARY KEY, name TEXT, url TEXT, secret TEXT, event_types TEXT,
+    created_at REAL, last_ok_at REAL, last_error TEXT, last_error_at REAL);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (id INTEGER PRIMARY KEY, webhook_id INTEGER, event_id INTEGER, body TEXT,
+    tries INTEGER DEFAULT 0, next_at REAL, done INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS deliveries_due ON webhook_deliveries (done, next_at);
+CREATE TABLE IF NOT EXISTS arrivals (job_id TEXT PRIMARY KEY, at REAL, data TEXT);
+CREATE INDEX IF NOT EXISTS arrivals_at ON arrivals (at);
 CREATE TABLE IF NOT EXISTS plex_links (rating TEXT PRIMARY KEY, mbid TEXT, name TEXT);
 CREATE TABLE IF NOT EXISTS youtube_drafts (album_id TEXT PRIMARY KEY, edition TEXT, links TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS youtube_videos (id TEXT PRIMARY KEY, data TEXT, saved_at REAL);

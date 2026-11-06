@@ -1,0 +1,83 @@
+{#- Design Uniformity: the display page shell (API-STANDARD.md section 9). Carried into apps by the
+    design updater: don't edit it in an app. Plain CSS and design tokens only, so it works with
+    uniform.css and with the Tailwind entry alike.
+
+    A page extends it and fills `body`; the body alone is what ?fragment=1 returns, so the script
+    below reloads it without a second renderer. The route passes:
+      opts         {theme: dark|light, scale: 0.5-3, accent: violet|blue|graphite|teal|fuchsia, static: bool}
+      stylesheets  URLs of the app's CSS (uniform.css, or its Tailwind build)
+      title        the page title
+      page         {refresh_s}: how often to reload the body
+      fragment_url this page with fragment=1 (and its token)
+      events_url   /api/v1/events with the token, or "" for none
+      event_names  the event types that should reload the page now -#}
+<!doctype html>
+<html lang="en-GB" data-theme="{{ opts.theme }}" class="{{ 'accent-' ~ opts.accent if opts.accent != 'violet' }}"
+      style="font-size: {{ '%.0f' % (16 * opts.scale) }}px">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>{{ title }}</title>
+  {%- for href in stylesheets %}
+  <link rel="stylesheet" href="{{ href }}">
+  {%- endfor %}
+  <style>
+    /* Accent families (DESIGN-SPEC 3.3) for ?accent=, so a wall of screens can match, whatever the
+       app's own accent is. The same values as css/accents.css, repeated so a display needs no
+       extra file. */
+    .accent-blue { --accent: 59 130 246; --accent-2: 99 102 241; --on-accent: 255 255 255; }
+    .accent-graphite { --accent: 203 213 225; --accent-2: 100 116 139; --on-accent: 9 11 17; }
+    .accent-teal { --accent: 20 184 166; --accent-2: 6 182 212; --on-accent: 9 11 17; }
+    .accent-fuchsia { --accent: 217 70 239; --accent-2: 168 85 247; --on-accent: 9 11 17; }
+    [data-theme="light"].accent-blue { --accent: 37 99 235; --accent-2: 79 70 229; --on-accent: 255 255 255; }
+    [data-theme="light"].accent-graphite { --accent: 51 65 85; --accent-2: 100 116 139; --on-accent: 255 255 255; }
+    [data-theme="light"].accent-teal { --accent: 15 118 110; --accent-2: 14 116 144; --on-accent: 255 255 255; }
+    [data-theme="light"].accent-fuchsia { --accent: 162 28 175; --accent-2: 126 34 206; --on-accent: 255 255 255; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body { background: rgb(var(--bg)); color: rgb(var(--text)); -webkit-font-smoothing: antialiased; }
+    .du-display { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 4vmin; }
+    .du-display-body { flex: 1; min-height: 0; }
+    .du-display-updated { margin: 0; padding-top: .5rem; text-align: right; font-size: .75rem; color: rgb(var(--faint)); }
+    .du-display-updated[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <main id="du-display" class="du-display"
+        data-fragment="{{ fragment_url }}" data-events="{{ events_url }}" data-refresh="{{ page.refresh_s }}"
+        data-event-names="{{ event_names | join(' ') }}">
+    <div id="du-body" class="du-display-body">{% block body %}{% endblock %}</div>
+    <p id="du-updated" class="du-display-updated" hidden></p>
+  </main>
+  {%- if not opts.static %}
+  <script>
+  (function () {
+    var root = document.getElementById("du-display"), body = document.getElementById("du-body"),
+        note = document.getElementById("du-updated");
+    if (!root || !window.fetch) return;
+    var every = Math.max(5, +root.dataset.refresh || 30) * 1000, last = Date.now(), busy = false, soon = null;
+    function stale() {
+      note.textContent = "Last updated " + new Date(last).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"});
+      note.hidden = false;
+    }
+    function reload() {
+      if (busy) return;
+      busy = true;
+      fetch(root.dataset.fragment, {credentials: "same-origin", cache: "no-store"})
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function (html) { body.innerHTML = html; last = Date.now(); note.hidden = true; })
+        .catch(stale)
+        .then(function () { busy = false; });
+    }
+    setInterval(reload, every);
+    if (window.EventSource && root.dataset.events) {
+      var es = new EventSource(root.dataset.events, {withCredentials: true});
+      var nudge = function () { clearTimeout(soon); soon = setTimeout(reload, 300); };
+      (root.dataset.eventNames || "").split(" ").forEach(function (t) { if (t) es.addEventListener(t, nudge); });
+    }
+  })();
+  </script>
+  {%- endif %}
+</body>
+</html>
