@@ -15,6 +15,8 @@ import requests
 
 WAIT_SECONDS = 300
 TIMEOUT = 20
+IDENTITY_RETRY = 300
+WEB_APP = "https://app.plex.tv/desktop/#!/server/{machine}/details?key={key}"
 
 log = logging.getLogger("encore")
 
@@ -79,6 +81,33 @@ class Plex:
             raise LookupError("No music library in Plex")
         section, path = next((pair for pair in found if Path(pair[1]).name == name), found[0])
         return section["key"], path, section.get("refreshing", False)
+
+    def machine(self):
+        """The server's id, which Plex's web app links need. Asked once per server address (it needs no
+        sign-in) and kept; if Plex doesn't answer, links are left out and it's asked again later."""
+        if not self.server:
+            return ""
+        if self.state.get("machine_for") == self.server and self.state.get("machine"):
+            return self.state["machine"]
+        if time.time() - getattr(self, "identity_failed", 0) < IDENTITY_RETRY:
+            return ""
+        try:
+            response = requests.get(f"{self.server}/identity", headers={"Accept": "application/json"}, timeout=5)
+            machine = response.json()["MediaContainer"]["machineIdentifier"]
+        except Exception as error:
+            log.warning("Plex identity failed: %s", type(error).__name__)
+            self.identity_failed = time.time()
+            return ""
+        self.state.update(machine=machine, machine_for=self.server)
+        self.save()
+        return machine
+
+    def web_url(self, rating):
+        """A link that opens this artist or album in Plex's web app, wherever you are, or ""."""
+        machine = self.machine() if rating else ""
+        if not machine:
+            return ""
+        return WEB_APP.format(machine=quote(machine, safe=""), key=quote(f"/library/metadata/{rating}", safe=""))
 
     def status(self):
         if not self.server:

@@ -68,8 +68,9 @@ def mark_owned(albums):
     owned, wanted = s.owned, s.store.wanted_ids()
     for album in albums:
         album["owned"] = library.find(album["artist"], album["title"])
-        held = None if album["owned"] else owned.find(album)
-        if held:
+        held = owned.find(album)
+        album["plex_url"] = s.plex.web_url(held["rating"]) if held else ""
+        if held and not album["owned"]:
             album["owned"] = {"match": "exact", "folder": f"{held['title']} in Plex", "quality": None}
         album["wanted"] = album["id"] in wanted
 
@@ -269,11 +270,14 @@ def artist_page(artist_id):
     others = []
     for row in store.plex_albums():
         if row["mbid"] == artist_id and album_key(row["title"]) not in listed:
-            others.append({"title": row["title"], "year": row["year"], "cover": f"/api/plex/thumb/{row['rating']}"})
+            others.append({"title": row["title"], "year": row["year"], "cover": f"/api/plex/thumb/{row['rating']}",
+                           "plex_url": s.plex.web_url(row["rating"])})
     s.filling.extend(a["id"] for a in sorted(albums, key=lambda a: a["kind"] != "Album")
                      if not store.has_details(a["id"]) and a["id"] not in s.filling)
     s.fill.set()
-    return jsonify(artist=artist_card(artist, s.owned.artists), albums=albums, others=others, saved_at=artist["albums_at"])
+    in_plex = s.store.plex_artist(artist_id)
+    card = {**artist_card(artist, s.owned.artists), "plex_url": s.plex.web_url(in_plex["rating"]) if in_plex else ""}
+    return jsonify(artist=card, albums=albums, others=others, saved_at=artist["albums_at"])
 
 
 def image(body_bytes, kind):

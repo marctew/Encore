@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(tempfile.mkdtemp(prefix="encore-check-"))
@@ -157,6 +158,17 @@ def main():
     expect("nobody found falls back to a search", match(3) is None)
     s.store.replace_plex([{"rating": "1", "name": "Somebody Else", "mbid": "", "thumb": ""}], [])
     expect("a reused rating doesn't inherit the match", client.get("/api/library").get_json()["artists"][0]["id"] == "")
+
+    # Links to Plex's web app
+    s.settings.data["plex"]["url"] = "http://plex.invalid:32400"
+    s.plex.state.update(machine="abc123", machine_for="http://plex.invalid:32400")
+    url = s.plex.web_url("120025")
+    expect("a Plex link opens the item in Plex's web app",
+           url == "https://app.plex.tv/desktop/#!/server/abc123/details?key=%2Flibrary%2Fmetadata%2F120025", url)
+    expect("no link without an item", s.plex.web_url("") == "")
+    s.plex.state["machine_for"] = "http://an-older-address:32400"
+    s.plex.identity_failed = time.time()
+    expect("no link while the server can't be asked", s.plex.web_url("120025") == "")
 
 
 main()

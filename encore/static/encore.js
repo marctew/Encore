@@ -61,6 +61,10 @@ function ownedNote(album) {
     `${owned.match === 'exact' ? 'You have this' : 'Possible match'}${have}: ${owned.folder}`);
 }
 
+// Opens the artist or album in Plex's web app, in a new tab. Only shown for what's really in Plex.
+const plexLink = (url, name) => url ? el('a', { class: 'btn btn-ghost btn-sm', href: url, target: '_blank', rel: 'noopener noreferrer',
+  title: `Open ${name} in Plex`, 'aria-label': `Open ${name} in Plex` }, glyph('plex', 'icon-sm'), 'Plex') : null;
+
 function albumAction(album) {
   const job = activeJob(album.id);
   if (job) return btn(job.state !== 'done' ? 'In the queue' : job.where === 'library' ? 'In your library' : 'In MusicImport', null, 'ghost', { disabled: true });
@@ -98,7 +102,7 @@ function albumCard(album) {
       el('div', { class: 'small muted' }, [album.artist, album.year].filter(Boolean).join(' · ')),
       album.kind ? el('div', { class: 'row meta' }, el('span', { class: 'badge-muted' }, album.kind)) : null,
       ownedNote(album),
-      el('div', { class: 'row actions' }, albumAction(album), wantButton(album))));
+      el('div', { class: 'row actions' }, albumAction(album), wantButton(album), plexLink(album.plex_url, album.title))));
 }
 
 function clock(seconds) {
@@ -193,6 +197,7 @@ function renderDetail(force = false) {
       ownedNote(album),
       el('div', { class: 'row actions' }, wantButton(album),
         detail.data && !detail.error ? switchView : null,
+        plexLink(album.plex_url, album.title),
         album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true, detail.view, detail.fillJob)) : null),
       album.saved_at ? el('div', { class: 'small faint' }, `Saved ${ago(album.saved_at)}`) : null))];
   if (detail.error) body.push(note(detail.error, 'bad'));
@@ -783,7 +788,8 @@ function renderArtistPage() {
         el('h1', { class: 'h1' }, artist.name),
         el('div', { class: 'muted' }, artistFacts(artist)),
         tagList(artist),
-        el('div', { class: 'small muted' }, `You have ${have} of ${plural(chosen.length, 'album')} here`))),
+        el('div', { class: 'small muted' }, `You have ${have} of ${plural(chosen.length, 'album')} here`),
+        artist.plex_url ? el('div', { class: 'row actions' }, plexLink(artist.plex_url, artist.name)) : null)),
     el('div', { class: 'row-between toolbar' },
       el('div', { class: 'row' },
         el('div', { class: 'segmented seg-text', role: 'radiogroup', 'aria-label': 'Show' }, filter('Studio albums', true), filter('Everything', false)),
@@ -795,7 +801,8 @@ function renderArtistPage() {
   if (page.others.length) {
     sections.push(el('h2', { class: 'h2 section-title' }, 'Also in your library'),
       el('div', { class: 'album-grid' }, ...page.others.map(album => el('article', { class: 'card album' }, cover(album.cover),
-        el('div', { class: 'album-body' }, el('h3', { class: 'h3 album-title' }, album.title), el('div', { class: 'small muted' }, album.year || ''))))));
+        el('div', { class: 'album-body' }, el('h3', { class: 'h3 album-title' }, album.title), el('div', { class: 'small muted' }, album.year || ''),
+          album.plex_url ? el('div', { class: 'row actions' }, plexLink(album.plex_url, album.title)) : null)))));
   }
   $('viewArtist').replaceChildren(...sections);
 }
