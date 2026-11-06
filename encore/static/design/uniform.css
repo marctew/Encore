@@ -314,4 +314,19 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .scroll-x::-webkit-scrollbar { height: 8px; }
 .scroll-x::-webkit-scrollbar-thumb { border-width: 2px; }
 
+/* ------------------------------------------------------------ scroll fade (7.17) */
+/* On a sideways scroller (a card row, a tab strip, a wide table): the edge fades out where there's
+   more to scroll, rather than cutting a card off hard. js/scroll-fade.js sets data-fade-l and
+   data-fade-r from the scroll position, so an edge stops fading once you reach that end. */
+@property --fade-l { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --fade-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+.scroll-fade {
+  --fade-l: 0px; --fade-r: 0px;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%);
+  transition: --fade-l 0.2s ease, --fade-r 0.2s ease;
+}
+.scroll-fade[data-fade-l] { --fade-l: 48px; }
+.scroll-fade[data-fade-r] { --fade-r: 48px; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; } }
