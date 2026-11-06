@@ -93,6 +93,10 @@
 .encore-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid rgb(var(--border));
   border-radius: var(--r-lg); background: rgb(var(--surface)); color: rgb(var(--text)); box-shadow: var(--shadow-pop); }
 .encore-dialog::backdrop { background: rgb(0 0 0 / 0.6); backdrop-filter: blur(2px); }
+/* While the album window is open the page behind it stays put, and a scroll that reaches the window's
+   end stops there rather than carrying on into the page. */
+html:has(.encore-dialog[open]) { overflow: hidden; }
+.encore-dialog { overscroll-behavior: contain; }
 .dialog-close { position: sticky; top: 12px; float: right; margin: 12px 12px 0 0; z-index: 2; background: rgb(var(--surface)); }
 .detail { padding: 24px; }
 .detail-head { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; }
@@ -207,7 +211,10 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
   .wanted-row { grid-template-columns: 52px minmax(0, 1fr); }
   .wanted-row .actions { grid-column: 1 / -1; }
   .encore-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; }
-  .detail { padding: 16px; }
+  /* Full screen on a phone, and as a home screen app the page runs under the status bar and the home
+     indicator: keep the close button and the content clear of both. */
+  .dialog-close { top: calc(12px + env(safe-area-inset-top)); margin-top: calc(12px + env(safe-area-inset-top)); }
+  .detail { padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
   .detail-head { grid-template-columns: minmax(0, 1fr); }
   .detail-head .thumb { max-width: 220px; }
   .yt-track { grid-template-columns: minmax(0, 1fr); gap: 8px; }

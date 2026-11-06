@@ -218,7 +218,12 @@ async function openAlbum(album, refresh = false, startIn = 'album', fillJob = nu
   confirming = null;
   const opened = detail;
   renderDetail(true);
-  if (!$('detail').open) $('detail').showModal();
+  if (!$('detail').open) {
+    $('detail').showModal();
+    // A history entry for the open window, so the phone's back gesture (or Back) closes it.
+    history.pushState({ ...(history.state || {}), album: true }, '', location.href);
+    albumEntry = true;
+  }
   $('detail').scrollTop = 0;
   try {
     opened.data = await api(`/api/album/${album.id}${refresh ? '?refresh=1' : ''}`);
@@ -488,7 +493,17 @@ async function queueYoutube(album, button) {
   if (detail) showAlbumView(detail.data || detail.summary);
 }
 
-$('detail').onclose = () => { detail = null; };
+// Closed from its own button, Escape or the backdrop: drop the history entry it added, and ignore
+// the popstate that causes.
+let albumEntry = false, skipPop = false;
+$('detail').onclose = () => {
+  detail = null;
+  if (albumEntry) {
+    albumEntry = false;
+    skipPop = true;
+    history.back();
+  }
+};
 $('detail').onclick = event => { if (event.target === $('detail')) $('detail').close(); };
 
 function renderResults() {
@@ -712,6 +727,12 @@ document.querySelectorAll('a[data-view]').forEach(link => {
 });
 
 addEventListener('popstate', event => {
+  if (skipPop) { skipPop = false; return; }
+  if ($('detail').open) {                       // Back with an album open closes it and stays put
+    albumEntry = false;
+    $('detail').close();
+    return;
+  }
   const state = event.state || { view: viewFromPath() };
   if (state.view === 'artist' && state.artist) openArtistPage(state.artist, false, state.best !== false, { push: false });
   else go(state.view || 'find', { push: false });
