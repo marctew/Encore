@@ -95,7 +95,7 @@ function renderPassword(on) {
     send(remove, '', 'Password is off.');
   };
   $('passwordBody').replaceChildren(
-    el('p', { class: 'hint card-intro' }, 'A password is on. Signing in lasts 30 days on each device. Changing or removing it needs the current one.'),
+    el('p', { class: 'hint card-intro' }, 'A password is on. Signing in lasts 90 days on each device. Changing or removing it needs the current one.'),
     currentBox, newBox,
     el('div', { class: 'row', style: 'margin-top:16px' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: event => { if (fresh.value) send(event.currentTarget, fresh.value, 'Password changed.'); else toast('Type the new password first.', 'error'); } }, 'Change password'),

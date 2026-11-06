@@ -53,6 +53,10 @@ def main():
         expect(f"blocked {path}", status == 401, status)
     response = client.get("/")
     expect("page goes to login", response.status_code == 302 and response.headers["Location"] == "/login")
+    response = client.get("/queue")
+    expect("login remembers the page asked for", response.headers["Location"] == "/login?next=%2Fqueue", response.headers["Location"])
+    status, body = client.get("/api/queue").status_code, client.get("/api/queue").get_json()
+    expect("API says to log in again, as JSON", status == 401 and body == {"error": "Log in again."}, body)
     status, _ = post(client, "/api/settings/test")
     expect("posts blocked", status == 401)
     for path in ("/api/youtube/update", "/api/queue/youtube", "/api/queue/abc123/fill", f"{album}/youtube/link", f"{album}/youtube/find", f"{album}/youtube/edition"):
@@ -79,6 +83,11 @@ def main():
     response = client.post("/api/login", json={"password": "correct horse"}, headers=HEAD)
     expect("right password works", response.status_code == 200)
     expect("session works", client.get("/api/queue").status_code == 200)
+    for asked, lands in (("/queue", "/queue"), ("//evil.example/x", "/"), ("/\\evil.example", "/"), ("https://evil.example", "/")):
+        where = client.get("/login", query_string={"next": asked}).headers.get("Location")
+        expect(f"after login, next={asked} goes to {lands}", where == lands, where)
+    refused = client.get("/api/plex/artist/999999/match")
+    expect("refusals are JSON errors", refused.status_code == 404 and refused.get_json() == {"error": "Not Found"}, refused.get_data(as_text=True))
     set_cookie = response.headers["Set-Cookie"]
     expect("cookie hidden from scripts", "HttpOnly" in set_cookie and "SameSite=Lax" in set_cookie, set_cookie)
 

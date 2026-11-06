@@ -10,7 +10,7 @@ import os
 import secrets
 import time
 
-SESSION_DAYS = 30
+SESSION_DAYS = 90
 MIN_LENGTH = 8
 MAX_FAILS = 5
 LOCK_SECONDS = 60

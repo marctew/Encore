@@ -3,3 +3,6 @@ archive/
 venv/
 __pycache__/
 *.pyc
+*.bak*
+*.env
+!deploy/*.env.example

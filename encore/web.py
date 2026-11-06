@@ -11,8 +11,12 @@ import time
 from collections import deque
 from types import SimpleNamespace
 
+from urllib.parse import quote
+
 from flask import Blueprint, Flask, Response, current_app, jsonify, redirect, render_template, request, send_file, url_for
 from markupsafe import Markup
+from werkzeug.http import HTTP_STATUS_CODES
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from . import __version__, engine, match
 from .auth import MIN_LENGTH, SESSION_DAYS, Auth
@@ -455,11 +459,17 @@ def remember(response):
                         samesite="Lax", secure=over_https())
 
 
+def safe_next(value):
+    """Where to go after signing in: a path on this site only, never another site (//evil, /\\evil)."""
+    value = str(value or "")
+    return value if value.startswith("/") and not value.startswith(("//", "/\\")) else "/"
+
+
 @bp.get("/login")
 def login_page():
     auth = svc().auth
     if not auth.enabled or auth.valid(request.cookies.get(COOKIE)):
-        return redirect("/")
+        return redirect(safe_next(request.args.get("next")))
     return render_template("login.html")
 
 
@@ -960,8 +970,9 @@ def guard():
     open_path = request.path in OPEN_PATHS or request.path.startswith("/static/")
     if auth.enabled and not open_path and not auth.valid(request.cookies.get(COOKIE)):
         if request.path.startswith("/api/"):
-            return jsonify(error="Sign in first"), 401
-        return redirect("/login")
+            return jsonify(error="Log in again."), 401
+        wanted = request.full_path.rstrip("?")
+        return redirect("/login" if wanted == "/" else f"/login?next={quote(wanted, safe='')}")
     return None
 
 
@@ -976,6 +987,7 @@ def create_app():
     DATA.mkdir(parents=True, exist_ok=True)
     PHOTOS.mkdir(exist_ok=True)
     app = Flask(__name__, static_folder="static", static_url_path="/static")
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
     web = Web()
     settings = Settings(DATA / "settings.json")
     use_folders(settings)
@@ -1009,7 +1021,7 @@ def create_app():
 
     @app.errorhandler(Refusal)
     def refused(error):
-        return Response(error.text, status=error.status, content_type="text/plain; charset=utf-8")
+        return jsonify(error=error.text or HTTP_STATUS_CODES.get(error.status, "Refused")), error.status
 
     # 503, not 502: Cloudflare swaps an origin's 502 for its own error page, which would hide the message.
     @app.errorhandler(SourceError)

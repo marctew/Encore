@@ -28,7 +28,9 @@ document.getElementById('login').onsubmit = async event => {
   try {
     const res = await fetch('/api/login', { method: 'POST', headers: { 'X-Encore': '1', 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: document.getElementById('password').value }) });
-    if (res.ok) return location.replace('/');
+    // Back to the page that asked for the sign-in, if it's one of Encore's own.
+    const next = new URLSearchParams(location.search).get('next') || '/';
+    if (res.ok) return location.replace(/^\/(?![\/\\])/.test(next) ? next : '/');
     problem.textContent = (await res.json()).error || 'That didn’t work.';
   } catch { problem.textContent = 'Encore isn’t answering.'; }
   button.disabled = false;
