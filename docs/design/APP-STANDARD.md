@@ -45,7 +45,7 @@ How Marc's homelab apps are built, so every app is put together, run and updated
   scripts/update.sh      deploys this checkout (section 6)
   deploy/<service>.service           the systemd unit
   deploy/<service>.env.example       the template for the secrets file
-  docs/design/           DESIGN-SPEC.md and this file, copied in by the design updater
+  docs/design/           DESIGN-SPEC.md, this file and PWA-ICONS.md, copied in by the design updater
   README.md              what it is, a layout table, how to run it, what isn't in the repo
 ```
 
@@ -149,6 +149,7 @@ health = "http://127.0.0.1:8765/healthz"
 "tools/du_flask.py" = "backroom/du_flask.py"
 "DESIGN-SPEC.md" = "docs/design/DESIGN-SPEC.md"
 "APP-STANDARD.md" = "docs/design/APP-STANDARD.md"
+"PWA-ICONS.md" = "docs/design/PWA-ICONS.md"
 ```
 
 In `web.py`: `from .du_flask import init_design` and `init_design(app, os.environ.get("<APP>_DESIGN_STATE", "/var/lib/<app>/design"))`.
@@ -163,7 +164,7 @@ One app at a time, each in its own commit:
 5. Point the design updater at the new paths, and press **Check now** on the card.
 6. Add this line to the app's CLAUDE.md:
 
-> Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md` (from `C:/ClaudeCowork/Design Uniformity`). Follow both; no one-off styles or layouts.
+> Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md`, with home screen icons to `docs/design/PWA-ICONS.md` (from `C:/ClaudeCowork/Design Uniformity`). Follow them; no one-off styles or layouts.
 
 | App | Status |
 |---|---|

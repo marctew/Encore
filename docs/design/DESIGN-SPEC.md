@@ -29,6 +29,7 @@ The accent colour says which category an app belongs to (section 3.3). The app i
 | Path | What it is | Use it when |
 |---|---|---|
 | `DESIGN-SPEC.md` | This document | Always |
+| `PWA-ICONS.md` | Home screen icons, `manifest.json` and full-screen behaviour on phones | Every app, with section 10 |
 | `preview.html` | Every token, component and glyph on one page, with switches for theme and accent | Open it in a browser to see the system or check a change. Click a glyph to copy its SVG. |
 | `css/uniform.css` | The whole system as plain CSS: tokens, base, layout, components | Apps with no build step (e.g. Vital Signs: Flask + vanilla JS) |
 | `css/tailwind.preset.js` + `css/tailwind-components.css` | The same system for Tailwind (standalone CLI, no Node) | Apps built like Binge Stats |
@@ -472,6 +473,7 @@ Use the same glyph for the same idea in every app:
 - **Name:** two words. The first is in `--text` and the second has the brand gradient ("Binge **Stats**"), at semibold with tight tracking.
 - **Tab title:** "Page · App name".
 - **`theme-color` meta:** matches `--bg` for the current theme.
+- **Home screen:** the touch icons, `manifest.json` and full-screen tags are in `PWA-ICONS.md`. They're made from the app icon with a square tile.
 
 ## 11. Charts
 
@@ -561,14 +563,14 @@ Scrollbars are thin, rounded and quiet until hovered, and they follow the theme.
   - no horizontal scroll at 375px;
   - tables and tab strips scroll inside their own box;
   - long names truncate with `title` holding the full text.
-- **Safe areas:** use `viewport-fit=cover`, and pad the bottom nav with `env(safe-area-inset-bottom)`.
+- **Safe areas:** use `viewport-fit=cover`, pad the top bar with `env(safe-area-inset-top)` and the bottom nav with `env(safe-area-inset-bottom)` (`PWA-ICONS.md` 3).
 
 ## 17. Building a new app: checklist
 
 1. **Shell:** copy `templates/base.html` and `partials/`. Set the app name parts, the nav (at most 5 for phones, or use More) and the accent family for the app's category (3.3).
 2. **CSS:** plain apps link `css/uniform.css` (+ `accents.css`). Tailwind apps use the preset and start `input.css` with `tailwind-components.css`. Build with the standalone CLI.
 3. **Glyphs:** use `templates/macros/icons.html` (Jinja), or `glyphs/icons.svg` / `js/icons.js` (vanilla). Use the fixed meanings in 9.4.
-4. **Icon:** make one from `brand/app-icon-template.svg` in the app's accent family.
+4. **Icon:** make one from `brand/app-icon-template.svg` in the app's accent family, then the home screen icons and manifest from it (`PWA-ICONS.md`, checklist in its section 8).
 5. **Pages:** build only from the components in section 7. Every list and chart gets an empty state, every action gives toast feedback, and every page-level problem gets a banner.
 6. **Assets:**
    - Front-end libraries (htmx, Alpine, ECharts, SortableJS) are pinned by version and sha256 and fetched at build time.
@@ -650,3 +652,4 @@ health = "http://127.0.0.1:8765/healthz" # anything below 500 counts as up
 | 2026-11-06 | Inline confirms (7.10) float above the button, over the page, instead of opening inside it, so a confirm in a scrolling table no longer clips or scrolls the table. The popover's text wraps even inside a `nowrap` cell. `js/confirm.js` gains `duPlace()`, which the `confirm_button` macro and `design-card.js` use. | Muddy Paws (source) |
 | 2026-11-06 | The scroll fade (7.17), from Binge Stats: `scroll-fade` in both CSS files and `js/scroll-fade.js`, so a sideways row fades at the edge where there's more to scroll instead of cutting a card off. | Binge Stats (source) |
 | 2026-11-06 | `API-STANDARD.md`: Encore has the API (14), with what it found (20). Through the tunnel, Cloudflare's Browser Integrity Check blocks API readers until the app's hostname has a Configuration Rule turning it off for `/api/v1/` and `/display/` (4); Encore and Binge Stats have one. `tools/check_api.py` looks headers up case-insensitively, since Cloudflare sends them in lower case. | Encore (source) |
+| 2026-11-06 | Added `PWA-ICONS.md`: home screen icons, `manifest.json` and full-screen tags. The top bar in `uniform.css` pads for `safe-area-inset-top`. | – |
