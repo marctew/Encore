@@ -39,9 +39,13 @@ $('hideOwned').onchange = () => {
 };
 
 // Square covers and round portraits sit on a placeholder; the image fades in, and if it fails the placeholder stays (7.12).
+// Pictures already shown once skip the fade-in, so redrawing a list doesn't make them blink.
+const shownPictures = new Set();
+
 function picture(src, cls, fallback) {
-  const img = el('img', { src, alt: '', loading: 'lazy' });
-  img.onload = () => img.classList.add('loaded');
+  const seen = shownPictures.has(src);
+  const img = el('img', { src, alt: '', loading: seen ? 'eager' : 'lazy', class: seen ? 'loaded' : undefined });
+  img.onload = () => { img.classList.add('loaded'); shownPictures.add(src); };
   img.onerror = () => img.remove();
   return el('div', { class: cls }, fallback, img);
 }
@@ -634,9 +638,13 @@ async function refreshJobs() {
   try {
     const next = (await api('/api/queue')).jobs;
     if (dragging) return;
-    const changed = JSON.stringify(next) !== JSON.stringify(jobs);
+    // The queue redraws for any change (a download's percent), the rest of the page only when a job
+    // comes, goes or changes state, since that's all album cards and buttons show of it.
+    const shape = list => JSON.stringify(list.map(j => [j.id, j.album_id, j.state, j.where]));
+    const changed = JSON.stringify(next) !== JSON.stringify(jobs), moved = shape(next) !== shape(jobs);
     jobs = next;
-    if (changed) { renderJobs(); renderAll(); }
+    if (changed) renderJobs();
+    if (moved) renderAll();
   } catch {}
 }
 
