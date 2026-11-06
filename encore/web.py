@@ -900,7 +900,13 @@ def artist_view(artist_id):
 
 @bp.get("/favicon.ico")
 def favicon():
-    return redirect(url_for("static", filename="icon.svg"), 301)
+    return redirect(url_for("static", filename="favicon.ico"), 301)
+
+
+@bp.get("/static/icon.svg")
+def old_icon():
+    """The icon's old address, before it moved to static/img/ (PWA-ICONS.md 1). The guard lets /static/ through."""
+    return redirect(url_for("static", filename="img/icon.svg"), 301)
 
 
 @bp.get("/settings")
@@ -938,7 +944,7 @@ def about():
     info = {
         "tagline": "Finds albums on Usenet, checks every track, and files them where Plex can see them",
         "github": "https://github.com/marctew/Encore",
-        "name": ("", "Encore"), "icon": url_for("static", filename="icon.svg"),
+        "name": ("", "Encore"), "icon": url_for("static", filename="img/icon.svg"),
         "facts": [("Server", server), ("Plex", plex), ("Indexers", str(len(s.indexers.active())))],
         "data": [("Artists in Plex", count("plex_artists")), ("Albums in Plex", count("plex_albums")),
                  ("Artists looked up", count("artists")), ("Albums looked up", count("albums")),

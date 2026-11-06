@@ -6,14 +6,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   {% include "partials/theme_head.html" %}
   <title>Sign in · Encore</title>
-  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='img/icon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="32x32">
+  {#- Home screen (Design Uniformity PWA-ICONS.md 2). theme-color comes from partials/theme_head.html. -#}
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png', v=app_version) }}">
+  <meta name="apple-mobile-web-app-title" content="Encore">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json', v=app_version) }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='design/uniform.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='design/accents.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='encore.css') }}">
 </head>
 <body class="signin">
 <form class="card card-pad signin-card" id="login">
-  <div class="brand signin-brand"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></div>
+  <div class="brand signin-brand"><img src="{{ url_for('static', filename='img/icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></div>
   <label class="field"><span class="label">Password</span>
     <input class="input" id="password" type="password" autocomplete="current-password" autofocus required></label>
   <button class="btn btn-primary signin-button" id="submit">Sign in</button>

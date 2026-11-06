@@ -18,7 +18,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   {% include "partials/theme_head.html" %}
   <title>{% block title %}Encore{% endblock %}</title>
-  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='img/icon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="32x32">
+  {#- Home screen (Design Uniformity PWA-ICONS.md 2). theme-color comes from partials/theme_head.html. -#}
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png', v=app_version) }}">
+  <meta name="apple-mobile-web-app-title" content="Encore">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json', v=app_version) }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='design/uniform.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='design/accents.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='encore.css') }}">
@@ -28,7 +35,7 @@
 <body>
 <div class="shell">
   <aside class="sidebar">
-    <a href="/" class="brand" data-view="find"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
+    <a href="/" class="brand" data-view="find"><img src="{{ url_for('static', filename='img/icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
     <nav class="nav" aria-label="Sections">
       {% for key, href, label, glyph in nav %}
       <a href="{{ href }}" class="nav-link{{ ' active' if here == key }}{{ ' nav-queue' if key == 'queue' }}"{% if key != 'settings' %} data-view="{{ key }}"{% endif %}>{{ icon(glyph, 'icon') }}<span class="nav-label">{{ label }}</span>{% if key in ('wanted', 'queue') %}<span class="nav-count" data-count="{{ key }}" hidden></span>{% endif %}</a>
@@ -39,7 +46,7 @@
   </aside>
 
   <header class="topbar">
-    <a href="/" class="brand topbar-brand" data-view="find"><img src="{{ url_for('static', filename='icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
+    <a href="/" class="brand topbar-brand" data-view="find"><img src="{{ url_for('static', filename='img/icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
     {% if signed_in %}
     <form method="post" action="/logout"><button class="btn-icon" aria-label="Sign out" title="Sign out">{{ icon('logout', 'icon') }}</button></form>
     {% endif %}

@@ -9,6 +9,7 @@ Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md
 - `encore/` the Flask package. `web.py` has the app factory (`create_app`), the routes and the guard; `engine.py` the queue and filing; `sources.py` the MusicBrainz, indexer, SABnzbd and Deezer clients; `youtube.py` yt-dlp, run as its own program; `api.py` the outside API (`/api/v1/`, `/display/`, documented in `docs/API.md`), on the shared `du_api.py`; `plex.py`, `store.py` (SQLite), `match.py`, `filing.py`, `auth.py`.
 - `encore/templates/` the pages; `encore/static/` the page scripts: `shell.js` (shared), `encore.js` (Find, Library, Wanted, Queue and artist pages as views of one page, each with its own URL) and `settings.js`.
 - `wsgi.py` serves it under gunicorn (one worker: the queue runs in-process); `python -m encore` runs it alone for development.
+- `encore/static/img/icon.svg` is the app icon; `encore/static/brand/logo.svg` (the same with a square tile) is the source for the home screen PNGs and `favicon.ico`, made by `tools/make_icons.py encore/static` (Design Uniformity PWA-ICONS.md) and committed.
 - `scripts/update.sh` deploys a checkout; `install.sh` and `deploy/encore.service` set up a new machine.
 
 ## Rules
@@ -23,4 +24,4 @@ Built to `docs/design/APP-STANDARD.md` and styled to `docs/design/DESIGN-SPEC.md
 
 ## Tests
 
-`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes), `tools/check_youtube.py` (YouTube albums against a fake yt-dlp, `tools/fake_ytdlp.py`), `tools/check_api_encore.py` (the outside API against fakes) and `tools/check_auth.py` (the password, the guard, and matching Plex artists) print PASS lines and exit non-zero on a failure. Run all four with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.
+`tools/check_usenet.py` (indexers, SABnzbd and the queue against fakes), `tools/check_youtube.py` (YouTube albums against a fake yt-dlp, `tools/fake_ytdlp.py`), `tools/check_api_encore.py` (the outside API against fakes), `tools/check_auth.py` (the password, the guard, and matching Plex artists) and `tools/check_pwa.py` (the home screen icons and manifest, loading without a sign-in) print PASS lines and exit non-zero on a failure. Run all five with the venv's Python after any server change. Try page changes on a throwaway copy of the data on a spare port, never on the live queue.

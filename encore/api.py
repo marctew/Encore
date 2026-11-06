@@ -853,7 +853,7 @@ def delete_webhook(hook_id):
 def install(app, s):
     from .du_flask import git_sha
     c = init_api(app, name="encore", title="Encore", version=__version__, sha=lambda: git_sha(app.root_path),
-                 accent="blue", icon="/static/icon.svg", time_zone=lambda: TIME_ZONE, check_token=check_token,
+                 accent="blue", icon="/static/img/icon.svg", time_zone=lambda: TIME_ZONE, check_token=check_token,
                  is_admin_session=is_admin_session, csrf_ok=csrf_ok)
     for name, (title, _, params) in FEEDS.items():
         c.add_feed(name, title, FEED_REFRESH[name], params)
