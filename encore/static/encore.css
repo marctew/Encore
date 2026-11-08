@@ -273,3 +273,13 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .dl-arrival .muted, .dl-arrival .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-arrival-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-aspect-ratio: 1/1) { .dl-lower { flex-direction: column; } }
+
+/* Collapsed sidebar (Design Uniformity 6.1): a rail of icons. Counts sit on the glyph's corner; the
+   download status waits for the sidebar to open (the Queue page has it all). */
+@media (min-width: 1024px) {
+  [data-sidebar="collapsed"] .sidebar .nav-link { position: relative; }
+  [data-sidebar="collapsed"] .sidebar .nav-label { flex: none; }
+  [data-sidebar="collapsed"] .sidebar .nav-count { position: absolute; top: 2px; right: 4px; min-width: 16px; padding: 0 4px;
+    font-size: 10px; line-height: 16px; }
+  [data-sidebar="collapsed"] .side-status { display: none; }
+}

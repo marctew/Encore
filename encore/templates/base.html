@@ -30,6 +30,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='design/accents.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='encore.css') }}">
   <script src="{{ url_for('static', filename='design/confirm.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='design/sidebar.js') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -38,10 +39,11 @@
     <a href="/" class="brand" data-view="find"><img src="{{ url_for('static', filename='img/icon.svg') }}" alt=""><span class="brand-gradient">Encore</span></a>
     <nav class="nav" aria-label="Sections">
       {% for key, href, label, glyph in nav %}
-      <a href="{{ href }}" class="nav-link{{ ' active' if here == key }}{{ ' nav-queue' if key == 'queue' }}"{% if key != 'settings' %} data-view="{{ key }}"{% endif %}>{{ icon(glyph, 'icon') }}<span class="nav-label">{{ label }}</span>{% if key in ('wanted', 'queue') %}<span class="nav-count" data-count="{{ key }}" hidden></span>{% endif %}</a>
+      <a href="{{ href }}" class="nav-link{{ ' active' if here == key }}{{ ' nav-queue' if key == 'queue' }}" title="{{ label }}"{% if key != 'settings' %} data-view="{{ key }}"{% endif %}>{{ icon(glyph, 'icon') }}<span class="nav-label">{{ label }}</span>{% if key in ('wanted', 'queue') %}<span class="nav-count" data-count="{{ key }}" hidden></span>{% endif %}</a>
       {% endfor %}
     </nav>
     <div class="side-status" id="sideStatus" aria-live="polite"></div>
+    {% include "partials/sidebar_toggle.html" %}
     {% with signout_url='/logout' if signed_in else None, about_url='/about' %}{% include "partials/sidebar_foot.html" %}{% endwith %}
   </aside>
 

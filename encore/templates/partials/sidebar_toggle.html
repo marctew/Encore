@@ -1,0 +1,6 @@
+{#- Design Uniformity: the sidebar's Collapse button (spec 6.1). Goes in the sidebar just above the footer:
+      {% include "partials/sidebar_toggle.html" %}{% include "partials/sidebar_foot.html" %}
+    with js/sidebar.js loaded. Collapsed, the sidebar is a rail of icons; give each nav link a title (its name) so the
+    rail has tooltips. The choice is kept in this browser (localStorage "sidebar") and applied by theme_head.html. -#}
+{%- from "macros/icons.html" import icon -%}
+<button type="button" class="nav-link sidebar-toggle" data-sidebar-toggle aria-expanded="true" title="Collapse the sidebar">{{ icon('chevron-left', 'icon') }}<span>Collapse</span></button>
