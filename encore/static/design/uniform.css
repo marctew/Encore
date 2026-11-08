@@ -134,6 +134,22 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .grid-tiles { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (min-width: 1024px) { .grid-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; } }
 
+/* Collapsible sidebar (6.1): partials/sidebar_toggle.html and js/sidebar.js. Collapsed, the sidebar is a 72px rail of
+ * icons; each nav link's name is its tooltip (title). Set on <html data-sidebar="collapsed"> before first paint by
+ * partials/theme_head.html, so there's no flash. Desktop only: phones have no sidebar. */
+.sidebar-toggle .icon { transition: transform 200ms var(--ease); }
+@media (min-width: 1024px) {
+  .shell, .sidebar { transition: padding 200ms var(--ease), width 200ms var(--ease); }
+  [data-sidebar="collapsed"] .shell { padding-left: 72px; }
+  [data-sidebar="collapsed"] .sidebar { width: 72px; padding: 24px 12px; overflow: hidden; }
+  [data-sidebar="collapsed"] .brand { justify-content: center; padding: 0; gap: 0; font-size: 0; }
+  [data-sidebar="collapsed"] .nav-link { justify-content: center; gap: 0; padding: 10px 0; font-size: 0; }   /* the name hides; the icon stays */
+  [data-sidebar="collapsed"] .sidebar-toggle .icon { transform: rotate(180deg); }
+  [data-sidebar="collapsed"] .sidebar-foot .segmented { grid-auto-flow: row; }
+  [data-sidebar="collapsed"] .sidebar-foot .version-link { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .shell, .sidebar, .sidebar-toggle .icon { transition: none; } }
+
 /* Sidebar footer (7.15): Sign out, theme switch, version line. Same place in every app. */
 .sidebar-foot { margin-top: 24px; padding-top: 16px; border-top: 1px solid rgb(var(--border)); }
 .sidebar-foot form { margin: 0; }
