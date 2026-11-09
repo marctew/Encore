@@ -77,6 +77,12 @@ def main():
     for path in ("/api/queue", "/api/status", "/api/settings", "/api/wanted", "/api/library", "/"):
         cache = client.get(path).headers.get("Cache-Control", "")
         expect(f"{path} can't be kept by a shared cache", "no-store" in cache, cache)
+    with app.test_request_context("/api/plex/thumb/1"):
+        from flask import Response
+        thumb = Response(b"x", mimetype="image/jpeg")
+        thumb.headers["Cache-Control"] = "public, max-age=60"
+        cache = app.process_response(thumb).headers["Cache-Control"]
+        expect("a public answer is made private", cache == "private, max-age=60", cache)
     client.delete_cookie(server.COOKIE)
 
     client.set_cookie(server.COOKIE, "9999999999.deadbeef")

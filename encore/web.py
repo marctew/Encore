@@ -1006,14 +1006,16 @@ def harden(response):
         response.headers["Cache-Control"] = "no-cache"
         return response
     # Everything else is the signed-in person's own: pages and JSON are never kept anywhere, and what a
-    # browser may keep (photos, Plex thumbnails) is private, so a shared cache in front of Encore (the
-    # Cloudflare tunnel) never stores it and hands it to someone else. The outside API's own answers say
-    # private or public themselves (du_api).
-    cache = response.headers.get("Cache-Control")
-    if not cache:
-        response.headers["Cache-Control"] = "no-store"
-    elif not any(word in cache for word in ("private", "public", "no-store")):
-        response.headers["Cache-Control"] = f"private, {cache}"
+    # browser may keep (photos, Plex thumbnails, the outside API's images and feeds) is private, never
+    # public, so a shared cache in front of Encore (the Cloudflare tunnel) never stores it and hands it to
+    # someone else. Flask's send_file says public when given a max_age, so that's swapped too.
+    words = [w.strip() for w in response.headers.get("Cache-Control", "").split(",")
+             if w.strip() and w.strip().lower() != "public"]
+    if not words:
+        words = ["no-store"]
+    elif not {"private", "no-store"} & {w.lower() for w in words}:
+        words.insert(0, "private")
+    response.headers["Cache-Control"] = ", ".join(words)
     return response
 
 
