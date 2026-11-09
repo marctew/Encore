@@ -999,6 +999,13 @@ def harden(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
+    # Design Uniformity APP-STANDARD 12: static files are kept but revalidated (Flask answers 304 from the
+    # ETag), so a deploy's CSS and JS show at once; pages are never kept. Anything else that sets its own
+    # caching (photos and cover art, the display pages, the event stream) keeps it.
+    if request.endpoint == "static":
+        response.headers["Cache-Control"] = "no-cache"
+    elif response.mimetype == "text/html":
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 

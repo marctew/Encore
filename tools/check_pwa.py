@@ -3,6 +3,7 @@ throwaway copy of the app, with a password set so the icons are shown to load wi
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image  # noqa: E402
 
-from encore import engine  # noqa: E402
+from encore import __version__, engine  # noqa: E402
 from encore import web as server  # noqa: E402
 
 results = []
@@ -61,9 +62,9 @@ def main():
 
     # Old addresses still work, for pages and phones that know them.
     r = client.get("/favicon.ico")
-    expect("/favicon.ico redirects to the .ico", r.status_code == 301 and r.headers["Location"].endswith("/static/favicon.ico"), r.headers.get("Location"))
+    expect("/favicon.ico redirects to the .ico", r.status_code == 301 and r.headers["Location"].split("?")[0].endswith("/static/favicon.ico"), r.headers.get("Location"))
     r = client.get("/static/icon.svg")
-    expect("old /static/icon.svg redirects", r.status_code == 301 and r.headers["Location"].endswith("/static/img/icon.svg"), r.headers.get("Location"))
+    expect("old /static/icon.svg redirects", r.status_code == 301 and r.headers["Location"].split("?")[0].endswith("/static/img/icon.svg"), r.headers.get("Location"))
 
     logo = (Path(server.__file__).parent / "static" / "brand" / "logo.svg").read_text()
     body = logo[logo.index("<svg"):]
@@ -76,8 +77,33 @@ def main():
         expect(f"{where}: full screen", '<meta name="apple-mobile-web-app-capable" content="yes">' in html
                and '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' in html)
         expect(f"{where}: manifest, cache-busted", 'rel="manifest" href="/static/manifest.json?v=' in html)
-        expect(f"{where}: favicons", 'href="/static/img/icon.svg" type="image/svg+xml"' in html and 'href="/static/favicon.ico" sizes="32x32"' in html)
+        expect(f"{where}: favicons", re.search(r'href="/static/img/icon\.svg\?v=\d+" type="image/svg\+xml"', html)
+               and re.search(r'href="/static/favicon\.ico\?v=\d+" sizes="32x32"', html))
         expect(f"{where}: one theme-color", html.count('<meta name="theme-color"') == 1, html.count('<meta name="theme-color"'))
+        # test_static_links_carry_a_version (APP-STANDARD 12): a changed file is a new address, so no cache
+        # between here and a phone can serve the old copy. ?v=<mtime> from du_flask, or the home screen
+        # icon and manifest's own ?v=<app version> (PWA-ICONS.md).
+        links = re.findall(r'(?:href|src)="(/static/[^"]*)"', html)
+        versioned = re.compile(rf"\?v=(\d+|{re.escape(__version__)})$")
+        unversioned = [link for link in links if not versioned.search(link)]
+        expect(f"{where}: static links carry a version", links and not unversioned, unversioned or "no static links")
+
+    # Pages are never kept; static files are kept but revalidated (APP-STANDARD 12). The photos and cover
+    # art keep their own max-age.
+    client.post("/api/login", json={"password": "correct horse"}, headers={"X-Encore": "1"})
+    r = client.get("/")
+    expect("a page is no-store", r.status_code == 200 and r.mimetype == "text/html"
+           and r.headers.get("Cache-Control") == "no-store", (r.status_code, r.headers.get("Cache-Control")))
+    r = client.get("/login")
+    expect("the sign-in page is no-store", r.headers.get("Cache-Control") == "no-store", r.headers.get("Cache-Control"))
+    for name in ("encore.css", "design/uniform.css", "encore.js"):
+        r = client.get(f"/static/{name}")
+        expect(f"static {name} is no-cache", r.status_code == 200 and r.headers.get("Cache-Control") == "no-cache",
+               (r.status_code, r.headers.get("Cache-Control")))
+    etag = client.get("/static/encore.css").headers.get("ETag")
+    r = client.get("/static/encore.css", headers={"If-None-Match": etag})
+    expect("an unchanged static file answers 304, no-cache", r.status_code == 304 and r.headers.get("Cache-Control") == "no-cache",
+           (r.status_code, r.headers.get("Cache-Control")))
 
 
 main()
