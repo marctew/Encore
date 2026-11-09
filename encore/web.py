@@ -1004,8 +1004,16 @@ def harden(response):
     # caching (photos and cover art, the display pages, the event stream) keeps it.
     if request.endpoint == "static":
         response.headers["Cache-Control"] = "no-cache"
-    elif response.mimetype == "text/html":
-        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+    # Everything else is the signed-in person's own: pages and JSON are never kept anywhere, and what a
+    # browser may keep (photos, Plex thumbnails) is private, so a shared cache in front of Encore (the
+    # Cloudflare tunnel) never stores it and hands it to someone else. The outside API's own answers say
+    # private or public themselves (du_api).
+    cache = response.headers.get("Cache-Control")
+    if not cache:
+        response.headers["Cache-Control"] = "no-store"
+    elif not any(word in cache for word in ("private", "public", "no-store")):
+        response.headers["Cache-Control"] = f"private, {cache}"
     return response
 
 

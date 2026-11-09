@@ -72,6 +72,13 @@ def main():
     status, _ = post(client, "/api/login", {"password": "x"}, headers={})
     expect("posts without the page's header refused", status == 403)
 
+    # A shared cache in front of Encore (the Cloudflare tunnel) must never keep a signed-in answer
+    response = client.post("/api/login", json={"password": "correct horse"}, headers=HEAD)
+    for path in ("/api/queue", "/api/status", "/api/settings", "/api/wanted", "/api/library", "/"):
+        cache = client.get(path).headers.get("Cache-Control", "")
+        expect(f"{path} can't be kept by a shared cache", "no-store" in cache, cache)
+    client.delete_cookie(server.COOKIE)
+
     client.set_cookie(server.COOKIE, "9999999999.deadbeef")
     expect("forged session refused", client.get("/api/queue").status_code == 401)
     client.set_cookie(server.COOKIE, "1." + auth.sign(1))
