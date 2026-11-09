@@ -34,7 +34,7 @@ How Marc's homelab apps are built, so every app is put together, run and updated
     health.py            /healthz
     auth.py              the login check and the login, logout and password routes
     <area>.py            one module per area of the app, each adding its own routes
-    du_flask.py          copied in by the design updater; never edit it here
+    du_flask.py          copied in by the design updater; never edit it here (it also versions static links, 12)
     templates/           base.html plus one .html per page
     static/
       <app>.css          the app's own styles, on top of the design system
@@ -108,6 +108,7 @@ New apps use one name for the folder, service and env file. Older apps keep the 
 - **JSON APIs:** actions are `POST` with a JSON body, answering JSON. Errors are `{"error": "…"}` with a 4xx status, written for a person to read. These are the app's own page APIs. What other things read (displays, Docket, Home Assistant) is the public `/api/v1/` in **`API-STANDARD.md`**.
 - **Feedback:** toasts (`toast.js`) for results, inline confirm popovers (`DESIGN-SPEC.md` 7.10) for anything destructive. Never `alert()` or `window.confirm()`.
 - **Behind a proxy:** `ProxyFix(app.wsgi_app, x_proto=1, x_host=1)`, so links are right through h2s or Tailscale.
+- **Caching:** pages are `no-store`, static files `no-cache`, and every static link carries `?v=` (section 12). On the Cloudflare tunnel, the app's hostname also needs the zone rules in section 13.
 
 ## 5. Git
 
@@ -216,3 +217,41 @@ Section 3 keeps secrets in `/etc/<app>.env`. An app may instead let an admin ent
 - **Save and test tests first, and saves only if it passes** (Paws' Tractive card: log in and list what it finds). On a failure nothing changes and the flash says why: "Not saved: …". On a pass it says what the test found.
 - **Until the key is set:** saving says so and where to put it ("PAWS_SECRET_KEY isn't set in /etc/paws.env, so the login can't be saved."). Until a secret is entered, the pages that need it show a banner saying where to add it, and everything else works.
 - **What isn't a secret** stays in the app's settings table. Paws' Google browser key has to reach the page to draw the map, so it isn't secret; its Google-side restrictions are what protect it, and it must differ from the server key.
+
+## 12. Static files and caching
+
+Learned from HomeForm, 9 Nov 2026: a CSS fix didn't show on Marc's iPhone for hours after a deploy, because a cache between the app and the phone kept the old stylesheet (section 13 has why). On the LAN it was fine, so it's easy to miss.
+
+- **Pages are `no-store`; static files are `no-cache`.** Set both in the app's `after_request`, as HomeForm's `security_headers` in `homeform/web.py` does:
+
+  ```python
+  if resp.mimetype == "text/html":
+      resp.headers["Cache-Control"] = "no-store"
+  elif request.endpoint == "static":
+      resp.headers["Cache-Control"] = "no-cache"   # revalidate, so a deploy's CSS and JS show at once
+  ```
+
+  `no-cache` doesn't mean "don't keep it": the browser keeps the file and asks each time whether it changed, and Flask answers `304` from the file's ETag, so it costs a round trip, not a download. Responses that set their own caching (images and feeds in `API-STANDARD.md` 6 and 10, display pages in 9) keep theirs.
+- **Every static link is versioned with `?v=<file's mtime>`**, so a changed file is a new address and no cache can serve the old copy. `du_flask` does this for every `url_for('static', filename=...)` from `init_design` (v1.19), so an app gets it on its next design update. A link that already passes `v=` (the `v=app_version` icons in `PWA-ICONS.md`) keeps its own; `init_design(..., version_static=False)` turns it off. An app that isn't on `du_flask` copies `static_version` from HomeForm's `homeform/web.py`, and its test `tests/test_pages.py::test_static_links_carry_a_version` (the page's `href` and `src` end in `?v=<digits>`).
+- **Only links made with `url_for` are versioned.** Write static links with `url_for('static', ...)`, never as a hard-coded `/static/...` path.
+- **JS modules imported relatively aren't versioned.** `import "./x.js"` inside a module, and `url()`s and `@import`s inside a stylesheet, are fetched by the browser at their plain address. With `no-cache` honoured they revalidate anyway, which is why section 13's Cache Rule matters as well as the `?v=`: without it, Cloudflare tells the browser to keep those for 4 hours.
+
+## 13. On the Cloudflare tunnel
+
+When an app's hostname is added to the tunnel (`<app>.marctew.co.uk`), the `marctew.co.uk` zone needs a rule or two for it. These are zone-wide settings that are right for other sites and wrong for ours, so each app's hostname gets its own exception; the zone defaults stay as they are.
+
+- [ ] **A Cache Rule, so browsers keep the app's own `Cache-Control`. Every app on the tunnel.** The zone's Browser Cache TTL is 4 hours (`browser_cache_ttl` = 14400), and Cloudflare replaces a response's `no-cache` with `max-age=14400` on the way out, so phones away from home keep old CSS and JS for up to 4 hours after a deploy (section 12). In the zone, Caching → Cache Rules, or by API in the zone ruleset phase `http_request_cache_settings`:
+
+  ```json
+  {
+    "description": "<App>: browsers keep <App>'s own Cache-Control (no-cache on static files, so a deploy shows at once)",
+    "expression": "(http.host eq \"<app>.marctew.co.uk\")",
+    "action": "set_cache_settings",
+    "action_parameters": { "browser_ttl": { "mode": "respect_origin" } }
+  }
+  ```
+
+  HomeForm's is the first. Check from outside with `curl -sI https://<app>.marctew.co.uk/static/<app>.css | grep -i cache-control`: it should say `no-cache`, not `max-age=14400`.
+- [ ] **A Configuration Rule turning Browser Integrity Check off for the API. Only if the app has `/api/v1/` or display pages.** Phase `http_config_settings`, `bic: false` for `http.host eq "<app>.marctew.co.uk" and (starts_with(http.request.uri.path, "/api/v1/") or starts_with(http.request.uri.path, "/display/"))`. `API-STANDARD.md` 4 has why.
+- [ ] **Check it through the tunnel, not just on the LAN.** Cloudflare isn't in the path at home, so neither problem shows there. Load the app on a phone off Wi-Fi after a deploy.
+

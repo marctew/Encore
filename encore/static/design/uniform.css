@@ -117,7 +117,21 @@ code { font-family: var(--mono); font-size: 0.9em; }
   display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; font-size: 11px; font-weight: 500;
   color: rgb(var(--muted)); background: none; border: 0; font-family: inherit; cursor: pointer;
 }
+.bottom-nav a, .bottom-nav button { -webkit-tap-highlight-color: transparent; }
 .bottom-nav .active { color: rgb(var(--accent)); }
+/* More (6): with more than five items the fifth is <details class="menu-wrap nav-more">, a <summary> and a .menu of
+   the rest. The summary sits in the bar like the other items; the menu opens upwards, above the bar. */
+.nav-more { position: relative; display: flex; }
+.nav-more > summary {
+  list-style: none; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0;
+  font-size: 11px; font-weight: 500; color: rgb(var(--muted)); cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.nav-more > summary::-webkit-details-marker { display: none; }
+.nav-more > summary::marker { content: ""; }
+.nav-more > summary.active, .nav-more[open] > summary { color: rgb(var(--accent)); }
+.nav-more .menu { top: auto; bottom: 100%; right: 8px; left: auto; margin: 0 0 8px; min-width: 200px; }
+.bottom-nav .nav-more .menu-item { flex-direction: row; gap: 8px; padding: 12px 14px; font-size: 15px; }
+.bottom-nav .nav-more .menu-item.active { color: rgb(var(--accent)); }
 .main { max-width: 1280px; margin: 0 auto; padding: 24px 16px 112px; }
 @media (min-width: 640px) { .main { padding-left: 24px; padding-right: 24px; } }
 @media (min-width: 1024px) {

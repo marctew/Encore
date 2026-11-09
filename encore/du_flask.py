@@ -14,6 +14,10 @@ du-sync-<app>.path unit picks up and runs du_sync.py. POSTs must be JSON, so a c
 send them. Show the card with templates/partials/design_card.html (Jinja) or your own markup, plus
 static/design/design-card.js.
 
+It also versions static links (APP-STANDARD 12): every url_for('static', filename=...) gets ?v=<the file's
+modified time>, so a deploy is a new address and no browser or cache in between keeps the old copy. A link
+that already passes v= keeps it. Turn it off with init_design(..., version_static=False).
+
 This file is shipped by Design Uniformity and copied in by the updater: don't edit it in the app.
 """
 from __future__ import annotations
@@ -139,11 +143,32 @@ def runtime_facts() -> list[tuple[str, str]]:
     return [("Python", platform.python_version()), ("SQLite", sqlite3.sqlite_version)]
 
 
-def init_design(app, state_dir: str | os.PathLike, url_prefix: str = "/api/design", version: str | None = None):
+def version_static_links(app):
+    """Add ?v=<mtime> to every url_for('static', filename=...) link (APP-STANDARD 12). Safe to call twice,
+    or alongside an app's own hook: a link that already has v= is left alone."""
+    if getattr(app, "_du_static_versioned", False):
+        return
+    app._du_static_versioned = True
+
+    @app.url_defaults
+    def _du_static_version(endpoint, values):
+        if endpoint != "static" or "v" in values or not values.get("filename") or not app.static_folder:
+            return
+        try:
+            values["v"] = int(os.stat(os.path.join(app.static_folder, values["filename"])).st_mtime)
+        except OSError:
+            pass                                       # a missing file gets a plain link, as before
+
+
+def init_design(app, state_dir: str | os.PathLike, url_prefix: str = "/api/design", version: str | None = None,
+                version_static: bool = True):
     """Also sets the Jinja globals the sidebar footer and About page use (spec 7.15):
     app_version ("1.0.0"), app_sha() (the checkout's short SHA, read each time so an update
-    shows without a restart) and runtime_facts()."""
+    shows without a restart) and runtime_facts(). With version_static (the default), static links
+    carry ?v=<mtime> (APP-STANDARD 12)."""
     d = Path(state_dir)
+    if version_static:
+        version_static_links(app)
     app.jinja_env.globals.setdefault("app_version", version or "")
     app.jinja_env.globals["app_sha"] = lambda: git_sha(app.root_path)
     app.jinja_env.globals["runtime_facts"] = runtime_facts

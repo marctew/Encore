@@ -182,7 +182,7 @@ Use `templates/base.html`, which works with either CSS.
 | | Phone (< 1024px) | Desktop (≥ 1024px) |
 |---|---|---|
 | Navigation | Sticky top bar (icon + name, one action on the right), plus a fixed bottom nav | 256px fixed sidebar: icon + name, nav links, Collapse (6.1), then the footer (sign out, theme switch, version). Collapsed, a 72px rail of icons |
-| Bottom nav | Up to 5 items. With more, the 5th is **More**, a menu holding the rest. Respects `safe-area-inset-bottom`. | Hidden |
+| Bottom nav | Up to 5 items. With more, the 5th is **More**, a menu holding the rest (6.2). Respects `safe-area-inset-bottom`. | Hidden |
 | Content | 16px gutters (24px from 640px), 112px bottom padding so the nav never covers content | Max 1280px wide, centred, 32px gutters, 40px top padding |
 
 ### 6.1 Collapsing the sidebar
@@ -212,6 +212,29 @@ sidebar offers it.
   4. the main list or chart;
   5. secondary sections.
 - **Sub-pages:** use the `tabs` strip, which scrolls sideways on phones and never wraps.
+
+### 6.2 More in the bottom nav
+
+With more than five nav items, the phone's bottom nav shows the first four and a fifth item, **More**, holding the
+rest. `templates/base.html` renders it; an app with its own shell uses the same markup:
+
+```html
+<details class="menu-wrap nav-more">
+  <summary class="active?"><svg class="icon">…more…</svg>More</summary>
+  <div class="menu">
+    <a href="…" class="menu-item active?"><svg class="icon icon-sm">…</svg>Label</a>
+  </div>
+</details>
+```
+
+- **Styles are in `uniform.css`** (`.nav-more`): the summary looks like the other bar items (glyph over an 11px
+  label, muted, no disclosure triangle, no tap highlight), and turns the accent colour while open or when the current
+  page is one of the items inside it (`active` on the summary). The menu opens **upwards**, above the bar, 8px in from
+  the right, and its items are rows (15px, 12px × 14px), so it never opens off the bottom of a phone screen.
+- **Glyph:** `more`.
+- **Closing:** a `<details>` opens and closes on its own; add the small script in `base.html` so a tap outside it, or
+  Escape, closes it too.
+- Apps don't add their own `.nav-more` rules: take `uniform.css`.
 
 ## 7. Components
 
@@ -673,3 +696,5 @@ health = "http://127.0.0.1:8765/healthz" # anything below 500 counts as up
 | 2026-11-06 | Muddy Paws and Docket icons added to `brand/`. Vital Signs now uses the teal example icon. | Muddy Paws, Docket, Vital Signs |
 | 2026-11-08 | The sidebar collapses to a rail of icons (6.1): `partials/sidebar_toggle.html`, `js/sidebar.js`, and `theme_head.html` restores it before first paint. Nav links carry a `title`. Opt-in: an app gets it by adding the partial and the script. | HomeForm (first), Docket, PodBridge, Vital Signs, Muddy Paws, Box Office, The Back Room, Encore; Binge Stats in its own shell; claude-ops by hand |
 | 2026-11-08 | Collapsed, the sidebar footer's theme switch drops its side margins, so its three buttons fit inside the box in the 72px rail. | Every plain-CSS app with the collapsing sidebar; claude-ops by hand |
+| 2026-11-09 | More in the phone's bottom nav (6.2), from HomeForm and Muddy Paws: `.nav-more` in `uniform.css` (sits in the bar like the other items, opens upwards, rows inside), and `templates/base.html` renders it as `<details class="menu-wrap nav-more">` with the `more` glyph and a close-on-outside-tap / Escape script, in place of the Alpine menu. The shell's nav glyphs carry `icon h-5 w-5`, so they're sized with plain `uniform.css` as well as Tailwind. Apps can delete their own `.nav-more` rules once they take this release. | – |
+| 2026-11-09 | Caching static files, from HomeForm: `APP-STANDARD.md` 12 (pages `no-store`, static `no-cache`, every static link versioned with `?v=<mtime>`) and 13 (the tunnel checklist: a Cloudflare Cache Rule with `browser_ttl: respect_origin` per app hostname, beside the Browser Integrity Check rule), since the zone's 4-hour Browser Cache TTL overrode `no-cache` and phones kept old CSS. `du_flask.init_design` now adds `?v=` to every `url_for('static', ...)` link; `version_static=False` turns it off. | HomeForm (source) |
