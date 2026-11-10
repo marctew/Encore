@@ -60,6 +60,25 @@ When running full-screen, the notch and home indicator need padding. The shell d
 
 Don't pad `body` as well, or the bars get the inset twice.
 
+### 3.1 Page height on phones
+
+Three iPhone behaviours, all found in HomeForm (9 Nov 2026), and what `uniform.css` and `js/fit-screen.js` do about them:
+
+- **Safari's `100vh` is too tall.** It's the height with the toolbars hidden, so a page that fits still scrolls a little.
+  `uniform.css` uses `100dvh` (the height that's showing) where the browser has it.
+- **As a home-screen app, `black-translucent` makes iOS report the screen short by the status bar's height** (about 43pt on
+  a notched iPhone). A page shorter than the real screen then leaves the fixed bottom nav floating above the bottom edge,
+  with a dark strip under it. Long pages hide it, because they're taller than the screen anyway. `uniform.css` adds
+  `env(safe-area-inset-top)` back to the minimum height in `display-mode: standalone`.
+- **Never stop a page scrolling with `overflow: hidden` on `html` or `body`.** In home-screen mode that shrinks what iOS
+  counts as the screen, and the bottom nav lifts with it.
+
+**A full-height page** (a list that scrolls inside its card, like a shopping list, with nothing else moving): put
+`full-height` on `<html>`, load `js/fit-screen.js` (plain script, `defer`), and give the part that fills the rest the
+class `fill` as a direct child of `.main`, with `overflow: auto` on its scrolling list. The script sets `--app-h` from
+`window.innerHeight`, measured, plus the status bar in standalone mode, because iOS's CSS heights don't always match what's
+showing. Check it on a real iPhone from the home screen: no emulator runs standalone mode.
+
 ## 4. `manifest.json`
 
 ```json

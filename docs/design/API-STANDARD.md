@@ -156,7 +156,7 @@ Times in answers are UTC (`...Z`) with an `at_label`, as above. Times **sent to*
 ## 6. Images
 
 - `GET /api/v1/images/<kind>/<id>?w=320` (or `h=`). The app fetches the original with its own credentials, resizes it, and answers `image/webp` (or `image/jpeg` if the reader's `Accept` doesn't list WebP, for ESP32 decoders).
-- Widths snap to 80, 160, 320, 640 and 1280, so caches stay small. Resized images are cached on disk in `/var/cache/<app>/images/` (`APP-STANDARD.md` 3), or under the app's data volume for an app in Docker (Binge Stats: `/data/image-cache/`). Each file is named by a hash of kind, id, width, format, quality and grey. They're served with `Cache-Control: public, max-age=86400` and an ETag, and pruned oldest-first (by mtime) above 500 MB by a background job.
+- Widths snap to 80, 160, 320, 640 and 1280, so caches stay small. Resized images are cached on disk in `/var/cache/<app>/images/` (`APP-STANDARD.md` 3), or under the app's data volume for an app in Docker (Binge Stats: `/data/image-cache/`). Each file is named by a hash of kind, id, width, format, quality and grey. They're served with `Cache-Control: private, max-age=86400` and an ETag (`private`, not `public`, since 9 Nov 2026: an image needs a token like everything else here, and a shared cache such as the tunnel's Cloudflare would hand a `public` one to a request without one), and pruned oldest-first (by mtime) above 500 MB by a background job.
 - `?fmt=jpeg&q=70` is allowed for devices that need it. `?gray=1` gives greyscale for e-ink.
 - An image path in a feed works with the same token the feed was read with, so a display can load it straight away.
 
@@ -243,6 +243,7 @@ Unchanged: apps that need to tell Marc something use the self-hosted ntfy server
 
 - Every GET answers with an `ETag`. A reader sending `If-None-Match` gets `304` with no body. Polling every 30 seconds then costs almost nothing.
 - `Cache-Control: private, max-age=<refresh_s / 2>` on status and feeds.
+- **Every answer carries a `Cache-Control`, and it's `private` or `no-store`, never `public` and never missing.** Everything under `/api/v1/` and `/display/` needs a token, and a shared cache (the tunnel's Cloudflare) stores what isn't marked and serves it to the next reader, token or not. `du_api` sets it on what it answers (status, feeds, images, display pages, errors); the app's own `after_request` makes every other answer `no-store` (`APP-STANDARD.md` 12). `scripts/check_api.py` checks status, a feed and an error for it.
 - Answers aim to be small: status under 2 KB, a feed page under 50 KB. The ESP32s parse JSON in a few hundred KB of RAM.
 - An app that's busy (an import) still answers status quickly from what it has, with `state: "busy"`, rather than blocking.
 - Per-token limit: 120 requests a minute, then `429` with `Retry-After`. Images and events don't count towards it.

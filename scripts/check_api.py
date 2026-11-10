@@ -83,14 +83,18 @@ check("status counts: at most 6, each key/label/value", isinstance(counts, list)
 check("status generated_at is UTC ...Z", bool(ISO.match(str(st.get("generated_at")))), repr(st.get("generated_at")))
 check("status refresh_s is a number", isinstance(st.get("refresh_s"), int))
 check("status is under 2 KB", len(body) < 2048, f"{len(body)} bytes")
-check("status has Cache-Control", "max-age" in (h.get("Cache-Control") or ""))
+check("status is private, max-age", "private" in (h.get("Cache-Control") or "") and "max-age" in (h.get("Cache-Control") or ""),
+      h.get("Cache-Control"))
+check("status didn't come from a shared cache", (h.get("cf-cache-status") or "").upper() not in ("HIT", "STALE", "UPDATING", "REVALIDATED"),
+      h.get("cf-cache-status"))
 
 code, _h, _b = get("/api/v1/status", url_token=True)
 check("a read token works in the URL", code == 200, f"HTTP {code}")
-code, _h, body = get("/api/v1/status", token="bs_not_a_real_token")
+code, h, body = get("/api/v1/status", token="bs_not_a_real_token")
 err = js(body) or {}
 check("a bad token gets 401 {error, code}", code == 401 and isinstance(err.get("error"), str) and err.get("code") == "unauthorised",
       f"HTTP {code} {body[:80]!r}")
+check("an error is no-store", "no-store" in (h.get("Cache-Control") or ""), h.get("Cache-Control"))
 if wtok:
     code, _h, body = get("/api/v1/status", token=wtok, url_token=True)
     check("a write token in the URL gets 400", code == 400, f"HTTP {code}")
@@ -105,12 +109,15 @@ for f in meta.get("feeds") or []:
            or ("at" in i and not ISO.match(str(i["at"]))) or None in i.values()]
     check(f"feed {f['name']}: shape and {len(items or [])} item(s)", ok and not bad, f"HTTP {code}, {len(bad)} bad item(s)")
     image = image or next((i["image"] for i in items or [] if i.get("image")), None)
-code, _h, _b = get("/api/v1/feeds/no_such_feed")
-check("an unknown feed gets 404", code == 404, f"HTTP {code}")
+code, h, _b = get("/api/v1/feeds/no_such_feed")
+check("an unknown feed gets 404, no-store", code == 404 and "no-store" in (h.get("Cache-Control") or ""),
+      f"HTTP {code} {h.get('Cache-Control')}")
 
 if image:
     code, h, body = get(image + ("&" if "?" in image else "?") + "w=160", headers={"Accept": "image/webp"})
     check("images: WebP when accepted", code == 200 and h.get("Content-Type") == "image/webp", f"HTTP {code} {h.get('Content-Type')}")
+    cc = h.get("Cache-Control") or ""
+    check("images: private, never public", "private" in cc and "public" not in cc, cc)
     code, h, body = get(image + ("&" if "?" in image else "?") + "w=160", headers={"Accept": "image/jpeg"}, url_token=True)
     check("images: JPEG otherwise, URL token works", code == 200 and h.get("Content-Type") == "image/jpeg", f"HTTP {code} {h.get('Content-Type')}")
 else:

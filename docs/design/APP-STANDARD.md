@@ -220,18 +220,32 @@ Section 3 keeps secrets in `/etc/<app>.env`. An app may instead let an admin ent
 
 ## 12. Static files and caching
 
-Learned from HomeForm, 9 Nov 2026: a CSS fix didn't show on Marc's iPhone for hours after a deploy, because a cache between the app and the phone kept the old stylesheet (section 13 has why). On the LAN it was fine, so it's easy to miss.
+Two lessons from 9 Nov 2026, both invisible on the LAN because Cloudflare isn't in the path at home (section 13). HomeForm: a CSS fix didn't show on Marc's iPhone for hours after a deploy, because a cache between the app and the phone kept the old stylesheet. Encore: Cloudflare kept its signed-in JSON and served it to anyone. The first is an annoyance; the second is a hole in the password.
 
-- **Pages are `no-store`; static files are `no-cache`.** Set both in the app's `after_request`, as HomeForm's `security_headers` in `homeform/web.py` does:
+- **Every answer that isn't a static file is `no-store`, or `private` if a browser may keep it. Never leave one without a `Cache-Control`.** A shared cache (the tunnel's Cloudflare, section 13) treats an answer with no `Cache-Control` as one it may store, and then hands it to the next person who asks, signed in or not. Learned from Encore, 9 Nov 2026: its pages said `no-store`, but its JSON (`/api/queue`, `/api/status`, `/api/wanted`, `/api/library`) said nothing, and with the zone's `aggressive` cache level and section 13's Cache Rule, Cloudflare cached them from Marc's signed-in requests and served them to anyone, with no cookie. The password was bypassed for those paths, and the page's own polls got a stale copy. So:
+  - pages, JSON, fragments, redirects and errors: `no-store`;
+  - what a browser may keep (photos, posters, thumbnails, the API's images): `private, max-age=…`, never `public`. Flask's `send_file` says `public` when given a `max_age`, so the hook below swaps it;
+  - static files (`/static/`): `no-cache`. They're the one thing that's the same for everyone.
+
+  Do it once, in the app's `after_request`, for every response, not by `mimetype == "text/html"`; a check on HTML alone is what missed Encore's JSON. Encore's `harden()` in `encore/web.py` is the reference:
 
   ```python
-  if resp.mimetype == "text/html":
-      resp.headers["Cache-Control"] = "no-store"
-  elif request.endpoint == "static":
+  if request.endpoint == "static":
       resp.headers["Cache-Control"] = "no-cache"   # revalidate, so a deploy's CSS and JS show at once
+      return resp
+  # Everything else is someone's own: never in a shared cache. What sets its own caching keeps its
+  # max-age but is made private (du_api's feeds and images, photos, an SSE stream's no-cache).
+  words = [w.strip() for w in resp.headers.get("Cache-Control", "").split(",")
+           if w.strip() and w.strip().lower() != "public"]
+  if not words:
+      words = ["no-store"]
+  elif not {"private", "no-store"} & {w.lower() for w in words}:
+      words.insert(0, "private")
+  resp.headers["Cache-Control"] = ", ".join(words)
   ```
 
-  `no-cache` doesn't mean "don't keep it": the browser keeps the file and asks each time whether it changed, and Flask answers `304` from the file's ETag, so it costs a round trip, not a download. Responses that set their own caching (images and feeds in `API-STANDARD.md` 6 and 10, display pages in 9) keep theirs.
+  `no-cache` doesn't mean "don't keep it": the browser keeps the file and asks each time whether it changed, and Flask answers `304` from the file's ETag, so it costs a round trip, not a download. Responses that set their own caching (images and feeds in `API-STANDARD.md` 6 and 10, display pages in 9) keep their `max-age`, made `private`. An app that isn't Flask does the same in its own middleware (claude-ops: every answer `no-store`).
+- **Test it** in `tests/test_caching.py` (or the app's own checks): a signed-in JSON answer and a redirect to the login are `no-store`, a photo or image is `private`, a static file is `no-cache`, and nothing says `public`. Check from outside too (section 13): with no cookie, `curl -sI https://<app>.marctew.co.uk/<a JSON path>` must never say `cf-cache-status: HIT`.
 - **Every static link is versioned with `?v=<file's mtime>`**, so a changed file is a new address and no cache can serve the old copy. `du_flask` does this for every `url_for('static', filename=...)` from `init_design` (v1.19), so an app gets it on its next design update. A link that already passes `v=` (the `v=app_version` icons in `PWA-ICONS.md`) keeps its own; `init_design(..., version_static=False)` turns it off. An app that isn't on `du_flask` copies `static_version` from HomeForm's `homeform/web.py`, and its test `tests/test_pages.py::test_static_links_carry_a_version` (the page's `href` and `src` end in `?v=<digits>`).
 - **Only links made with `url_for` are versioned.** Write static links with `url_for('static', ...)`, never as a hard-coded `/static/...` path.
 - **JS modules imported relatively aren't versioned.** `import "./x.js"` inside a module, and `url()`s and `@import`s inside a stylesheet, are fetched by the browser at their plain address. With `no-cache` honoured they revalidate anyway, which is why section 13's Cache Rule matters as well as the `?v=`: without it, Cloudflare tells the browser to keep those for 4 hours.
@@ -252,6 +266,18 @@ When an app's hostname is added to the tunnel (`<app>.marctew.co.uk`), the `marc
   ```
 
   HomeForm's is the first. Check from outside with `curl -sI https://<app>.marctew.co.uk/static/<app>.css | grep -i cache-control`: it should say `no-cache`, not `max-age=14400`.
+- [ ] **Add the hostname to the shared Cache Rule that keeps Cloudflare's edge cache off everything but `/static/`. Every app on the tunnel.** A second layer behind section 12's headers, from 9 Nov 2026 (Encore): if an app ever answers without a `Cache-Control` again, Cloudflare still won't keep it. It's one rule for every app, since the zone's plan allows only 10 Cache Rules and each app already has one; add the new hostname to its set:
+
+  ```json
+  {
+    "description": "Apps: never keep anything but /static/ in Cloudflare's cache (APP-STANDARD 12, behind the apps' own no-store)",
+    "expression": "(http.host in {\"encore.marctew.co.uk\" \"<app>.marctew.co.uk\" ...} and not starts_with(http.request.uri.path, \"/static/\"))",
+    "action": "set_cache_settings",
+    "action_parameters": { "cache": false }
+  }
+  ```
+
+  It only stops Cloudflare storing answers; browsers still follow the app's own `Cache-Control`, through the rule above. Check from outside, with no cookie, that a signed-in path such as `/api/status` answers `cf-cache-status: BYPASS` or `DYNAMIC`, never `HIT`.
 - [ ] **A Configuration Rule turning Browser Integrity Check off for the API. Only if the app has `/api/v1/` or display pages.** Phase `http_config_settings`, `bic: false` for `http.host eq "<app>.marctew.co.uk" and (starts_with(http.request.uri.path, "/api/v1/") or starts_with(http.request.uri.path, "/display/"))`. `API-STANDARD.md` 4 has why.
 - [ ] **Check it through the tunnel, not just on the LAN.** Cloudflare isn't in the path at home, so neither problem shows there. Load the app on a phone off Wi-Fi after a deploy.
 

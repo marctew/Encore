@@ -87,6 +87,21 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 /* ---------------------------------------------------------------- layout */
 .shell { min-height: 100vh; }
+/* Page height on phones (PWA-ICONS.md 3.1). In Safari 100vh is the height with its toolbars hidden, so every page was a
+   little taller than the screen and scrolled; dvh is what's showing. As a home-screen app with the black-translucent
+   status bar, iOS reports the screen short by the status bar's height, and a page shorter than the real screen leaves
+   the fixed bottom nav floating above the bottom edge: add the status bar back. */
+@supports (min-height: 100dvh) { body, .shell { min-height: 100dvh; } }
+@media (display-mode: standalone) { body, .shell { min-height: calc(100vh + env(safe-area-inset-top)); } }
+/* A full-height page: <html class="full-height"> with js/fit-screen.js. The shell is exactly the screen's height,
+   .main is a column, and its .fill child takes what's left (its scrolling part has overflow: auto), so only that
+   scrolls and the bottom nav sits on the bottom edge. Never lock the page with overflow: hidden on html or body
+   instead: in home-screen mode that shrinks what iOS counts as the screen and the bottom nav lifts with it. */
+html.full-height .shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); min-height: 0; }
+html.full-height .main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+html.full-height .main > * { flex: none; }
+html.full-height .main > .fill { flex: 1; min-height: 0; }
+html.full-height, html.full-height body { overscroll-behavior: none; }
 .sidebar {
   position: fixed; inset: 0 auto 0 0; z-index: 30; width: 256px; display: none; flex-direction: column;
   padding: 24px 16px; border-right: 1px solid rgb(var(--border)); background: rgb(var(--surface) / 0.6);

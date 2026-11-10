@@ -255,6 +255,7 @@ class ApiCore:
     def error(code: str, message: str, status: int, retry_after: int | None = None):
         resp = jsonify({"error": message, "code": code})
         resp.status_code = status
+        resp.headers["Cache-Control"] = "no-store"   # a shared cache keeps a 404 otherwise (APP-STANDARD 12)
         if retry_after is not None or status in (429, 503):
             resp.headers["Retry-After"] = str(retry_after if retry_after is not None else 30)
         return resp
@@ -536,7 +537,9 @@ def image_response(cache_dir, kind: str, ident: str, fetch: Callable[[int], byte
         tmp.write_bytes(data)
         os.replace(tmp, path)
     resp = send_file(path, mimetype=f"image/{ask.fmt}", conditional=True, etag=key, max_age=IMAGE_MAX_AGE)
-    resp.headers["Cache-Control"] = f"public, max-age={IMAGE_MAX_AGE}"
+    # private: an image needs a token like the rest of the API, so no shared cache (the tunnel's Cloudflare)
+    # may keep one and hand it to a request without a token. The reader's own browser still keeps it a day.
+    resp.headers["Cache-Control"] = f"private, max-age={IMAGE_MAX_AGE}"
     resp.headers["Vary"] = "Accept"
     return resp
 
