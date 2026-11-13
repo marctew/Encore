@@ -18,7 +18,7 @@ from markupsafe import Markup
 from werkzeug.http import HTTP_STATUS_CODES
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import __version__, engine, match
+from . import __version__, engine, filing, match
 from .auth import MIN_LENGTH, SESSION_DAYS, Auth
 from .config import DATA, PHOTOS, TRUSTED_PROXY
 from .engine import ACTIVE, Library, Owned, Queue, album_key, folders_ready, public, use_folders
@@ -367,6 +367,60 @@ def add_video():
     if not song:
         raise Refusal(409, "Encore can't tell which song this is")
     return jsonify(public(s.queue.add_video(artist, offer, {**verdict, "song": song})))
+
+
+def single_row(artist, video, wanted=""):
+    """A YouTube video offered as one of the artist's music videos, with the song it seems to be."""
+    scored = match.score_youtube({"title": wanted or match.youtube_song(artist["name"], video), "seconds": 0}, artist["name"], video)
+    audio = match.audio_only(video["channel"])
+    notes = [n for n in scored["notes"] if not n.startswith("Audio only")]
+    if audio:
+        notes.insert(0, "Audio over a still picture, not a real video")
+    return {**video, "song": match.youtube_song(artist["name"], video), "audio_only": audio, "notes": notes,
+            "score": scored["score"] - (80 if audio else 0)}
+
+
+@bp.post("/api/artist/<artist_id>/youtube")
+def artist_youtube(artist_id):
+    """Finds a music video on YouTube from a pasted link or a song name, for songs MusicBrainz doesn't list yet."""
+    checked_id(artist_id, "artist")
+    s = svc()
+    artist = s.store.artist(artist_id)
+    if not artist:
+        raise Refusal(404)
+    text = str(body().get("q", "")).strip()[:200]
+    if not text:
+        raise Refusal(400, "Paste a YouTube link or type the song's name")
+    # Only a link counts: a bare video id is 11 letters, and so is a song called Starburster.
+    video_id = youtube_id(text) if re.search(r"[/.]", text) else None
+    if video_id:
+        return jsonify(results=[single_row(artist, s.youtube.lookup(video_id))])
+    if re.match(r"^\w+://", text) or re.search(r"youtu\.?be", text, re.I):
+        raise Refusal(400, "That isn't a YouTube video link")
+    found = [v for v in s.youtube.search(f"{artist['name']} {text}") if not v["live"]]
+    for video in found:
+        s.store.save_youtube_video(video)
+    rows = sorted((single_row(artist, v, text) for v in found), key=lambda r: -r["score"])
+    return jsonify(results=rows[:5])
+
+
+@bp.post("/api/videos/youtube")
+def add_youtube_video():
+    data, s = body(), svc()
+    artist = s.store.artist(str(data.get("artist_id", "")))
+    video_id = youtube_id(str(data.get("video", "")))
+    cached = s.store.youtube_video(video_id) if video_id else None
+    if not artist or not cached:
+        raise Refusal(409, "That video has expired. Find it again.")
+    if not folders_ready():
+        raise Refusal(409, "Set your folders in Settings first")
+    song = " ".join(str(data.get("song", "")).split())[:120]
+    if not filing.safe(song):
+        raise Refusal(400, "Give the song a name")
+    with s.queue.lock:
+        if any(j["album_id"] == f"video-yt-{video_id}" and j["state"] in ACTIVE for j in s.queue.jobs):
+            raise Refusal(409, "Already queued")
+    return jsonify(public(s.queue.add_youtube_video(artist, cached["video"], song)))
 
 
 # ---------------------------------------------------------------- library and wanted

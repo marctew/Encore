@@ -4,7 +4,7 @@ import { $, api, busy, el, glyph, plural, refreshHealth, setCount, store, stored
 
 let albums = [], jobs = [], searched = false, confirming = null;
 let mode = 'albums', detail = null, view = 'find', cameFrom = 'find';
-let dragging = false, videos = null, page = null, studioOnly = true, wantAll = false, shelf = null, wanted = [];
+let dragging = false, videos = null, single = null, singleNode = null, page = null, studioOnly = true, wantAll = false, shelf = null, wanted = [];
 
 const VIEWS = {
   find: ['Find', 'Search your library, then everywhere else'],
@@ -568,7 +568,7 @@ function jobCard(job) {
     grip,
     cover(job.cover),
     el('div', { class: 'job-body' },
-      el('div', { class: 'job-title' }, `${job.artist} – ${job.title}`, job.kind === 'youtube' ? el('span', { class: 'badge-muted job-kind' }, 'YouTube') : null),
+      el('div', { class: 'job-title' }, `${job.artist} – ${job.title}`, job.kind === 'youtube' || (job.source && job.source.type === 'youtube') ? el('span', { class: 'badge-muted job-kind' }, 'YouTube') : null),
       el('div', { class: 'job-state small' }, state),
       running ? el('div', { class: 'progress-track job-bar' }, el('div', { class: 'progress-fill', style: `width:${percent}%` })) : null,
       buttons.length ? el('div', { class: 'row actions' }, ...buttons) : null));
@@ -826,7 +826,7 @@ function renderArtistPage() {
       el('div', { class: 'row' }, ...freshness(page.saved_at, () => openArtistPage(page.id, true, page.best, { push: false })))),
     shown.length ? el('div', { class: 'album-grid' }, ...shown.map(albumCard))
       : emptyState(chosen.length ? 'You have all of these' : 'No albums here', chosen.length ? 'Untick Hide albums I have to see them.' : 'Try Everything to see singles, EPs and live albums.', chosen.length ? 'check-circle' : 'music')];
-  sections.push(el('h2', { class: 'h2 section-title' }, 'Videos'), videoBlock());
+  sections.push(el('h2', { class: 'h2 section-title' }, 'Videos'), videoBlock(), singleBlock());
   if (page.others.length) {
     sections.push(el('h2', { class: 'h2 section-title' }, 'Also in your library'),
       el('div', { class: 'album-grid' }, ...page.others.map(album => el('article', { class: 'card album' }, cover(album.cover),
@@ -868,6 +868,103 @@ function videoBlock() {
       el('ul', { class: 'releases divide' }, ...other.map(videoRow))));
   }
   return el('div', { class: 'card card-pad' }, ...parts);
+}
+
+// One music video from YouTube, for a song MusicBrainz doesn't list yet (a single out this week).
+// The block keeps its node while someone is typing in it, so a queue update doesn't take the cursor away.
+function singleBlock() {
+  if (!single || single.id !== page.id) single = { id: page.id, q: '', song: '' };
+  if (singleNode && singleNode.dataset.artist === page.id && singleNode.contains(document.activeElement)) return singleNode;
+  singleNode = buildSingle();
+  return singleNode;
+}
+
+function redrawSingle() {
+  const old = singleNode;
+  singleNode = buildSingle();
+  if (old && old.isConnected) old.replaceWith(singleNode);
+}
+
+function buildSingle() {
+  const head = el('div', { class: 'single-head' },
+    el('h3', { class: 'h3' }, 'From YouTube'),
+    el('p', { class: 'small muted' }, "For a song that isn't listed yet, like a new single. Paste a link or type the song's name. The video is filed with the artist's music videos."));
+  const parts = [head];
+  if (single.picked) parts.push(pickedSingle(single.picked));
+  else {
+    const input = el('input', { class: 'input', type: 'search', id: 'singleQuery', placeholder: 'Song name or YouTube link', value: single.q,
+      disabled: single.loading || undefined, 'aria-label': 'Song name or YouTube link', enterkeyhint: 'search' });
+    input.oninput = () => { single.q = input.value; };
+    input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); findSingle(); } };
+    const find = btn('Find', () => findSingle(), 'ghost', { disabled: single.loading || undefined });
+    find.prepend(glyph('search'));
+    parts.push(el('div', { class: 'single-search' }, input, find));
+    if (single.loading) parts.push(el('div', { class: 'small muted' }, 'Looking on YouTube…'));
+    if (single.error) parts.push(el('div', { class: 'why' }, `${single.error}.`.replace(/\.\.$/, '.')));
+    if (single.results) {
+      parts.push(single.results.length
+        ? el('div', { class: 'yt-choices' }, el('span', { class: 'eyebrow' }, 'Pick one'),
+          el('ul', { class: 'divide' }, ...single.results.map(video => el('li', {},
+            el('button', { type: 'button', class: 'yt-choice', onclick: () => pickSingle(video) }, videoCard(video, false))))))
+        : el('div', { class: 'small muted' }, 'Nothing found on YouTube. Try other words, or paste the link.'));
+    }
+  }
+  return el('div', { class: 'card card-pad single-card', 'data-artist': page.id }, ...parts);
+}
+
+function pickedSingle(video) {
+  const job = activeJob(`video-yt-${video.id}`);
+  const name = el('input', { class: 'input', id: 'singleSong', value: single.song, maxlength: 120, autocomplete: 'off' });
+  const where = () => `Filed as ${page.artist.name}/${single.song.trim() || 'Song'}-video.mp4, and Plex shows it by that name.`;
+  const hint = el('div', { class: 'hint' }, where());
+  name.oninput = () => { single.song = name.value; hint.textContent = where(); if (!job) get.disabled = !name.value.trim(); };
+  name.onkeydown = event => { if (event.key === 'Enter' && name.value.trim()) { event.preventDefault(); getSingle(get); } };
+  const get = job ? btn(job.state === 'done' ? 'Done' : 'In the queue', null, 'primary', { disabled: true })
+    : btn('Get video', event => getSingle(event.currentTarget), 'primary', { disabled: !single.song.trim() || undefined });
+  const back = btn('Pick another', () => { single.picked = null; redrawSingle(); });
+  return el('div', { class: 'single-picked' },
+    videoCard(video, true),
+    el('div', { class: 'single-field' },
+      el('label', { class: 'label', for: 'singleSong' }, 'Song'),
+      name, hint),
+    el('div', { class: 'row actions' }, get, back));
+}
+
+async function findSingle() {
+  const q = single.q.trim(), opened = single;
+  if (!q) return;
+  Object.assign(opened, { loading: true, error: null, results: null });
+  redrawSingle();
+  try {
+    opened.results = (await api(`/api/artist/${opened.id}/youtube`, { method: 'POST', body: JSON.stringify({ q }) })).results;
+    // A pasted link is the video wanted, so there's nothing to choose between.
+    if (opened.results.length === 1 && /[/.]/.test(q)) pickSingle(opened.results[0], false);
+  } catch (error) {
+    opened.error = error.message;
+  }
+  opened.loading = false;
+  if (single === opened) redrawSingle();
+  const box = $('singleSong') || $('singleQuery');
+  if (box && single === opened) box.focus();
+}
+
+function pickSingle(video, redraw = true) {
+  Object.assign(single, { picked: video, song: video.song || '' });
+  if (redraw) {
+    redrawSingle();
+    const box = $('singleSong');
+    if (box) box.focus();
+  }
+}
+
+async function getSingle(button) {
+  const video = single.picked, song = single.song.trim();
+  const added = await busy(button, () => api('/api/videos/youtube', { method: 'POST', body: JSON.stringify({ artist_id: page.id, video: video.id, song }) }));
+  if (added === undefined) return;
+  toast(`${song} is in the queue.`);
+  Object.assign(single, { q: '', song: '', picked: null, results: null });
+  await refreshJobs();
+  redrawSingle();
 }
 
 async function findVideos() {

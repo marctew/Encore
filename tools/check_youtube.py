@@ -38,7 +38,9 @@ VIDEOS = {
     "brokenvide0": {"title": "Test Band - Something", "channel": "Test Band", "duration": 9, "fail": "HTTP Error 403: Forbidden"},
     "aaaaaaaaaa5": {"title": "Test Band - Something (Official Video)", "channel": "Test Band", "duration": 9},
     "slowvideo00": {"title": "Test Band - Oh! Darling", "channel": "Test Band", "duration": 10, "slow": True},
+    "newsingle01": {"title": "Test Band - Brand New Day (Official Video) 4K", "channel": "Test Band", "duration": 25},
 }
+ARTIST_ID = "33333333-3333-3333-3333-333333333333"
 
 
 def expect(name, ok, detail=""):
@@ -247,6 +249,50 @@ def main():
            and "1 video filed." in job["message"], job["message"])
     expect("only the gap was downloaded", downloads() == ["aaaaaaaaaa5"], downloads())
     expect("its video filed", (music / "Test Band" / "Something-video.mp4").exists())
+
+    # One music video for a song MusicBrainz doesn't list yet, from the artist page
+    s.queue.jobs.clear()
+    subprocess.run(["rm", "-rf", str(music / "Test Band")], check=True)
+    s.store.save_artist({"id": ARTIST_ID, "name": "Test Band"})
+    find = lambda q: client.post(f"/api/artist/{ARTIST_ID}/youtube", json={"q": q}, headers=HEAD)
+    response = find("Brand New Day")
+    found = response.get_json().get("results") or []
+    expect("a song name searches YouTube, the artist's own video first", response.status_code == 200 and found
+           and found[0]["id"] == "newsingle01" and found[0]["song"] == "Brand New Day", [(v["id"], v["score"], v["song"]) for v in found])
+    expect("a Topic upload isn't offered first", "aaaaaaaaaa2" not in [v["id"] for v in found[:1]])
+    topic = (find("https://youtu.be/aaaaaaaaaa2").get_json().get("results") or [{}])[0]
+    expect("a Topic upload is marked as no real video, its title taken as the song", topic.get("audio_only")
+           and topic["notes"][0].startswith("Audio over") and topic["song"] == "Something", topic)
+    response = find("https://www.youtube.com/watch?v=newsingle01")
+    found = response.get_json().get("results") or []
+    expect("a pasted link gives that video", response.status_code == 200 and [v["id"] for v in found] == ["newsingle01"], found)
+    response = find("https://evil.example/watch?v=newsingle01")
+    expect("a link to another site is refused here too", response.status_code == 400, response.get_data(as_text=True))
+    response = find("Starburster")
+    expect("an 11-letter song name is searched, not taken as a video id", response.status_code == 200 and len(response.get_json()["results"]) > 1)
+    expect("a missing artist is refused", client.post("/api/artist/44444444-4444-4444-4444-444444444444/youtube", json={"q": "x"},
+                                                      headers=HEAD).status_code == 404)
+    queue_single = lambda video, song: client.post("/api/videos/youtube", json={"artist_id": ARTIST_ID, "video": video, "song": song}, headers=HEAD)
+    response = queue_single("newsingle01", "  ")
+    expect("a video needs a song name", response.status_code == 400, response.get_data(as_text=True))
+    response = queue_single("zzzzzzzzzz9", "Brand New Day")
+    expect("a video Encore hasn't looked up is refused", response.status_code == 409, response.get_data(as_text=True))
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    response = queue_single("newsingle01", "Brand New Day")
+    expect("the video is queued", response.status_code == 200 and response.get_json()["kind"] == "video", response.get_data(as_text=True))
+    again = queue_single("newsingle01", "Brand New Day")
+    expect("can't queue the same video twice", again.status_code == 409)
+    job = wait(s.queue, response.get_json()["id"])
+    expect("the video is filed", job["state"] == "done" and job["where"] == "library" and job["folder"] == "Test Band/Brand New Day-video.mp4",
+           (job["message"], job.get("folder")))
+    expect("it's where Plex looks for music videos", (music / "Test Band" / "Brand New Day-video.mp4").exists())
+    expect("its quality is the video's", job["quality"].startswith("90p · 0:25"), job["quality"])
+    expect("the video download is cleared", downloads() == ["newsingle01"] and not any(downloads_dir.rglob("*.mp4")), list(downloads_dir.rglob("*")))
+    job = wait(s.queue, queue_single("newsingle01", "Brand New Day").get_json()["id"])
+    expect("a video already there isn't overwritten", job["state"] == "failed" and "already have" in job["message"], job["message"])
+    find("https://youtu.be/aaaaaaaaaa1")
+    job = wait(s.queue, queue_single("aaaaaaaaaa1", "Come Together").get_json()["id"])
+    expect("a clip too short to be a video fails", job["state"] == "failed" and "isn't a playable video" in job["message"], job["message"])
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return 0 if all(results) else 1

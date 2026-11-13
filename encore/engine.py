@@ -253,6 +253,21 @@ class Queue:
         self.wake.set()
         return job
 
+    def add_youtube_video(self, artist, video, song):
+        """One music video from YouTube, for a song MusicBrainz may not list yet. Filed like a Usenet video."""
+        job = {"title": song, "artist": artist["name"], "artist_id": artist["id"], "year": "", "tracks": 1,
+               "cover": f"/api/artist/{artist['id']}/photo", "album_id": f"video-yt-{video['id']}", "kind": "video",
+               "id": uuid.uuid4().hex[:12], "state": "queued", "percent": 0, "message": "", "step": "", "fix_artist": False,
+               "folder": "", "quality": "", "added": time.time(), "partial": False,
+               "source": {"type": "youtube", "video": video["id"], "title": video["title"], "seconds": video["seconds"],
+                          "channel": video["channel"]}}
+        with self.lock:
+            self.jobs.append(job)
+            self.update()
+        self.tell(job, None)
+        self.wake.set()
+        return job
+
     def add_youtube(self, album, edition, tracks, partial):
         """tracks: [{key, disc, number, title, video, seconds, channel}], the linked tracks of one edition."""
         job = {key: album[key] for key in ("title", "artist", "year", "cover")}
@@ -392,7 +407,7 @@ class Queue:
         if job.get("kind") == "youtube":
             return self.process_youtube(job)
         if job.get("kind") == "video":
-            source = self.download(job)
+            source = self.fetch_video(job) if job["source"].get("type") == "youtube" else self.download(job)
             self.check_cancel(job)
             self.update(job, state="verifying", message="Checking the video.")
             chosen = prepare_video(source, job)
@@ -506,6 +521,29 @@ class Queue:
         self.update(job, state="filing", message="Filing the album.", step="")
         self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
         self.file_videos(job, album, tracks, listed, videos)
+
+    def fetch_video(self, job):
+        """A single YouTube music video, into its own folder under Downloads, for prepare_video to check."""
+        folder = DOWNLOADS / "encore-youtube" / job["id"]
+        make_folder(DOWNLOADS)
+        need = (job["source"].get("seconds") or 300) * YOUTUBE_BYTES_PER_SECOND
+        if shutil.disk_usage(DOWNLOADS).free < need * 2 + MIN_FREE:
+            raise JobFailed("Not enough free space on the share for this video.")
+        shutil.rmtree(folder, ignore_errors=True)
+        self.update(job, storage=str(folder), step="YouTube video", percent=0)
+        shown = [0.0]
+
+        def progress(value):
+            if value - shown[0] >= 1:
+                shown[0] = value
+                self.update(job, percent=round(value, 1))
+
+        path = self.youtube.download(job["source"]["video"], folder, progress, lambda: job.get("cancel"))
+        if path is None:
+            self.check_cancel(job)
+            raise Cancelled
+        self.update(job, percent=100)
+        return folder
 
     def fetch_videos(self, job, tracks, folder, label="Track"):
         """Downloads each track's video, skipping any already here from an earlier try."""

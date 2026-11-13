@@ -188,6 +188,13 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .artist-info .h1 { overflow-wrap: anywhere; }
 .video-card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .video-card p { margin: 0; }
+.single-card { display: grid; gap: 12px; margin-top: 12px; }
+.single-head { display: grid; gap: 4px; }
+.single-head p { margin: 0; }
+.single-search { display: flex; gap: 8px; }
+.single-search .input { flex: 1; min-width: 0; }
+.single-picked { display: grid; gap: 12px; }
+.single-field { max-width: 480px; }
 
 /* Library tiles */
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
@@ -224,6 +231,7 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
   .yt-track { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .yt-left { padding-top: 0; }
   .yt-input-row .input { font-size: 16px; }
+  .single-search .input, .single-field .input { font-size: 16px; }
   .yt-bar .actions { margin-left: 0; }
   .queue-panel { padding: 12px; }
 }
