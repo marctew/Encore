@@ -54,7 +54,7 @@ const portrait = (src, name) => picture(src, 'portrait', el('span', { class: 'po
 const photoUrl = (artist, version = '') => `/api/artist/${artist.id}/photo?best=${artist.best === false ? 0 : 1}&v=${version}`;
 
 function activeJob(id) {
-  return jobs.find(j => j.album_id === id && ['queued', 'downloading', 'verifying', 'filing', 'scanning', 'done'].includes(j.state));
+  return jobs.find(j => j.album_id === id && ['queued', 'downloading', 'verifying', 'filing', 'scanning', 'review', 'done'].includes(j.state));
 }
 
 function ownedNote(album) {
@@ -184,8 +184,9 @@ function renderDetail(force = false) {
   if (!detail) return;
   // The builder keeps its own rows, so the queue's refresh doesn't wipe a link half typed.
   if (detail.view === 'youtube' && !force && $('detail').querySelector('.yt-builder')) return refreshYoutubeBar();
+  if (detail.view === 'split' && !force && $('detail').querySelector('.split')) return;
   const album = detail.data || detail.summary;
-  const switchView = detail.view === 'youtube'
+  const switchView = ['youtube', 'split'].includes(detail.view)
     ? btn('Back to downloads', () => showAlbumView(album))
     : btn('Build from YouTube', () => openYoutube(album));
   const facts = [album.released || album.year, album.label, album.kind, album.discs > 1 ? plural(album.discs, 'disc') : ''].filter(Boolean).join(' · ');
@@ -207,6 +208,7 @@ function renderDetail(force = false) {
   if (detail.error) body.push(note(detail.error, 'bad'));
   else if (!detail.data) body.push(note('Loading tracks…'));
   else if (detail.view === 'youtube') body.push(youtubeBlock(album));
+  else if (detail.view === 'split') body.push(splitBlock(album));
   else body.push(downloadsBlock(album), trackRows(album));
   $('detail').replaceChildren(
     el('button', { type: 'button', class: 'btn-icon dialog-close', 'aria-label': 'Close', title: 'Close', onclick: () => $('detail').close() }, glyph('x', 'icon')),
@@ -233,6 +235,7 @@ async function openAlbum(album, refresh = false, startIn = 'album', fillJob = nu
   if (detail === opened) renderDetail(true);
   if (opened.error) return;
   if (opened.view === 'youtube') return loadYoutube(opened.data);
+  if (opened.view === 'split') return loadSplit(opened);
   await loadDownloads(opened, album);
 }
 
@@ -247,6 +250,7 @@ async function loadDownloads(opened, album) {
 }
 
 function showAlbumView(album) {
+  stopPlaying();
   detail.view = 'album';
   detail.fillJob = null;
   detail.filling = false;
@@ -271,6 +275,7 @@ async function loadYoutube(album) {
   Object.assign(opened, { ytBusy: opened.ytBusy || {}, ytErrors: opened.ytErrors || {}, ytTyped: opened.ytTyped || {}, found: opened.found || {} });
   const only = opened.fillJob ? `?job=${opened.fillJob}` : '';
   try { opened.yt = await api(`/api/album/${album.id}/youtube${only}`); } catch (error) { opened.ytError = error.message; }
+  if (opened.yt && !opened.ytMode) opened.ytMode = opened.yt.whole && !opened.yt.tracks.some(t => t.video) ? 'whole' : 'tracks';
   if (detail === opened) renderDetail(true);
 }
 
@@ -360,6 +365,7 @@ function youtubeBlock(album) {
     : "Paste a link for each track, or let Encore find them. The sound becomes the album, as YouTube has it (AAC), and each video is filed with the artist's music videos.");
   if (detail.ytError) return el('section', { class: 'detail-section yt-builder' }, head, note(detail.ytError, 'bad'));
   if (!detail.yt) return el('section', { class: 'detail-section yt-builder' }, head, note('Loading tracks…'));
+  if (!fill && detail.ytMode === 'whole') return el('section', { class: 'detail-section yt-builder' }, head, youtubeModes(), ...wholeBlock(album));
   const rows = [];
   let disc = null;
   for (const track of detail.yt.tracks) {
@@ -369,7 +375,353 @@ function youtubeBlock(album) {
     }
     rows.push(youtubeRow(album, track));
   }
-  return el('section', { class: 'detail-section yt-builder' }, head, intro, youtubeBar(album), el('ol', { class: 'yt-tracks' }, ...rows));
+  return el('section', { class: 'detail-section yt-builder' }, head, fill ? null : youtubeModes(), intro, youtubeBar(album), el('ol', { class: 'yt-tracks' }, ...rows));
+}
+
+function youtubeModes() {
+  const choice = (label, value) => el('button', { type: 'button', role: 'radio', 'aria-checked': detail.ytMode === value ? 'true' : 'false',
+    onclick: () => { if (detail.ytMode !== value) { detail.ytMode = value; renderDetail(true); } } }, label);
+  return el('div', { class: 'segmented seg-text yt-mode', role: 'radiogroup', 'aria-label': 'Build from' },
+    choice('A link per track', 'tracks'), choice('One video of the whole album', 'whole'));
+}
+
+// ------------------------------------------------------------------ one video of the whole album
+// One link for the lot. Encore downloads its sound, finds where each track starts, and waits in the
+// queue for a person to check the joins (the split view, below) before anything is cut or filed.
+
+function chapterNote(video, tracks) {
+  const count = (video.chapters || []).length;
+  if (count === tracks) return el('div', { class: 'small yt-chapters ok' }, glyph('check', 'icon-sm'), `${plural(count, 'timestamp')} in the description, one for each track.`);
+  if (count) return el('div', { class: 'note' }, `${plural(count, 'timestamp')} in the description for ${plural(tracks, 'track')}, so Encore will go by the track lengths and the gaps instead.`);
+  return el('div', { class: 'small muted' }, 'No timestamps in the description, so Encore will go by the track lengths and the gaps.');
+}
+
+function wholeBlock(album) {
+  const yt = detail.yt, video = yt.whole, working = detail.wholeBusy, found = detail.wholeFound;
+  const current = video ? watchUrl(video.id) : '';
+  const input = el('input', { class: 'input yt-url', type: 'url', inputmode: 'url', placeholder: 'Paste the YouTube link',
+    value: detail.wholeTyped ?? current, disabled: working || undefined, 'aria-label': `YouTube link for the whole of ${album.title}` });
+  let sent = false;
+  const commit = () => {
+    if (sent || input.value.trim() === current) return;
+    sent = true;
+    setWhole(album, input.value.trim());
+  };
+  input.onchange = commit;
+  input.onpaste = () => setTimeout(commit, 0);
+  input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } };
+  const find = el('button', { type: 'button', class: 'btn-icon', title: 'Find on YouTube', 'aria-label': `Find ${album.title} on YouTube`,
+    disabled: working || found === 'loading' || undefined, onclick: () => findWhole(album) }, glyph('search', 'icon-sm'));
+  const clear = video ? el('button', { type: 'button', class: 'btn-icon', title: 'Remove link', 'aria-label': 'Remove the link',
+    disabled: working || undefined, onclick: () => setWhole(album, '') }, glyph('x', 'icon-sm')) : null;
+  let choices = null;
+  if (found === 'loading') choices = el('div', { class: 'small muted yt-status' }, 'Searching YouTube…');
+  else if (found) {
+    choices = el('div', { class: 'yt-choices' },
+      el('div', { class: 'row-between' }, el('span', { class: 'eyebrow' }, found.length ? 'Pick one' : 'Nothing found'),
+        btn('Close', () => { detail.wholeFound = null; renderDetail(true); })),
+      el('ul', { class: 'divide' }, ...found.map(item => el('li', {},
+        el('button', { type: 'button', class: 'yt-choice', onclick: () => setWhole(album, item.id) }, videoCard(item, false))))));
+  }
+  const job = activeJob(album.id);
+  const edition = yt.editions.length > 1 ? el('select', { class: 'input yt-edition', 'aria-label': 'Edition' },
+    ...yt.editions.map(e => el('option', { value: e.id, selected: e.id === yt.edition || undefined }, e.label))) : null;
+  if (edition) edition.onchange = () => changeEdition(album, edition.value, edition);
+  const queue = btn(job ? (job.state === 'done' ? 'Done' : 'In the queue') : 'Queue', event => queueWhole(album, event.currentTarget), 'primary',
+    { disabled: !!job || !video || working || undefined });
+  return [
+    el('p', { class: 'small muted yt-intro' }, `For an upload of the whole album in one video. Encore takes its sound, works out where each of the ${plural(yt.tracks.length, 'track')} starts, from the timestamps in the description if it has them and the gaps between songs, and then asks you to check before it cuts and files anything. The album is AAC, as YouTube has it, and no music videos are filed.`),
+    el('div', { class: 'yt-bar' }, edition,
+      el('span', { class: 'small muted tabular yt-count' }, `${plural(yt.tracks.length, 'track')} · ${clock(yt.seconds)}`),
+      el('div', { class: 'row actions' }, queue)),
+    el('div', { class: 'yt-whole' },
+      el('div', { class: 'yt-input-row' }, input, find, clear),
+      working ? el('div', { class: 'small muted yt-status' }, 'Looking it up…') : null,
+      video && !working ? videoCard(video, true) : null,
+      video && !working ? chapterNote(video, yt.tracks.length) : null,
+      detail.wholeError ? el('div', { class: 'why' }, `${detail.wholeError}.`.replace(/\.\.$/, '.')) : null,
+      choices)];
+}
+
+async function setWhole(album, url) {
+  const opened = detail;
+  Object.assign(opened, { wholeBusy: true, wholeError: null });
+  renderDetail(true);
+  try {
+    opened.yt = await api(`/api/album/${album.id}/youtube/whole`, { method: 'POST', body: JSON.stringify({ url }) });
+    opened.wholeFound = null;
+    opened.wholeTyped = undefined;
+  } catch (error) {
+    opened.wholeError = error.message;
+    opened.wholeTyped = url;
+  }
+  opened.wholeBusy = false;
+  if (detail === opened) renderDetail(true);
+}
+
+async function findWhole(album) {
+  const opened = detail;
+  Object.assign(opened, { wholeFound: 'loading', wholeError: null });
+  renderDetail(true);
+  try {
+    opened.wholeFound = (await api(`/api/album/${album.id}/youtube/whole/find`, { method: 'POST' })).results;
+  } catch (error) {
+    opened.wholeFound = null;
+    opened.wholeError = error.message;
+  }
+  if (detail === opened) renderDetail(true);
+}
+
+async function queueWhole(album, button) {
+  const video = detail.yt.whole;
+  if (video.fit === 'off' && !(await window.duConfirm(button, `The video is very different in length from the album. Queue it anyway?`, 'Queue anyway'))) return;
+  const added = await busy(button, () => api('/api/queue/youtube/whole', { method: 'POST', body: JSON.stringify({ album_id: album.id }) }));
+  if (added === undefined) return;
+  toast(`${album.title} is in the queue. Once it's downloaded, Encore asks you to check the tracks.`);
+  await refreshJobs();
+  await loadWanted();
+  if (detail) showAlbumView(detail.data || detail.summary);
+}
+
+// ------------------------------------------------------------------ checking where each track starts
+// cuts holds N + 1 boundaries for N tracks: each track's start, then where the last one ends. Every
+// change is saved as it's made, so a restart keeps it; nothing is cut until File the album.
+
+const audio = new Audio();
+audio.preload = 'none';
+let playing = null;          // { key, stop } while a join plays
+const fmt = seconds => {
+  const whole = Math.floor(seconds), tenth = Math.floor((seconds - whole) * 10 + 1e-6);
+  return `${clock(whole)}.${tenth}`;
+};
+const fitOf = (listed, seconds) => {
+  if (!listed || !seconds) return '';
+  const gap = Math.abs(listed - seconds);
+  if (gap <= Math.max(4, listed * 0.05)) return 'good';
+  return gap <= Math.max(10, listed * 0.15) ? 'close' : 'off';
+};
+const SHORTEST = 1;
+
+function openSplit(job) {
+  openAlbum({ id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover }, false, 'split', job.id);
+}
+
+async function loadSplit(opened) {
+  try {
+    opened.split = await api(`/api/queue/${opened.fillJob}/split`);
+    opened.cuts = [...opened.split.cuts];
+    opened.picked = 1;
+  } catch (error) {
+    opened.splitError = error.message;
+  }
+  if (detail === opened) renderDetail(true);
+}
+
+function stopPlaying() {
+  audio.pause();
+  if (playing) cancelAnimationFrame(playing.frame);
+  playing = null;
+  const head = document.querySelector('.split-head');
+  if (head) head.hidden = true;
+  document.querySelectorAll('.split .playing').forEach(node => node.classList.remove('playing'));
+}
+
+// Plays from..to (to null: until stopped), moving the playhead. The same key again stops it.
+function play(key, from, to) {
+  const again = playing && playing.key === key;
+  stopPlaying();
+  if (again) return;
+  const src = `/api/queue/${detail.fillJob}/split/audio`;
+  if (!audio.src.endsWith(src)) audio.src = src;
+  const duration = detail.split.duration;
+  audio.currentTime = Math.max(0, from);
+  audio.play().catch(() => { toast("Couldn't play the album's sound", 'error'); stopPlaying(); });
+  playing = { key, frame: 0 };
+  document.querySelector(`.split [data-play="${key}"]`)?.classList.add('playing');
+  const tick = () => {
+    if (!playing) return;
+    const head = document.querySelector('.split-head');
+    if (head) { head.hidden = false; head.style.left = `${audio.currentTime / duration * 100}%`; }
+    if ((to !== null && audio.currentTime >= to) || audio.ended) return stopPlaying();
+    playing.frame = requestAnimationFrame(tick);
+  };
+  playing.frame = requestAnimationFrame(tick);
+}
+
+let saveTimer = null;
+function saveCuts(opened) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try { await api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts }) }); }
+    catch (error) { toast(error.message, 'error'); }
+  }, 600);
+}
+
+function limits(cuts, place, duration) {
+  return [place === 0 ? 0 : cuts[place - 1] + SHORTEST, place === cuts.length - 1 ? duration : cuts[place + 1] - SHORTEST];
+}
+
+function setCut(place, value, redraw = true) {
+  const cuts = detail.cuts, [low, high] = limits(cuts, place, detail.split.duration);
+  cuts[place] = Math.round(Math.min(high, Math.max(low, value)) * 10) / 10;
+  detail.picked = place;
+  saveCuts(detail);
+  if (redraw) redrawSplit();
+}
+
+function snap(place) {
+  const cuts = detail.cuts, [low, high] = limits(cuts, place, detail.split.duration);
+  const near = detail.split.gaps.filter(at => at >= low && at <= high && Math.abs(at - cuts[place]) <= 30 && Math.abs(at - cuts[place]) > 0.05)
+    .sort((a, b) => Math.abs(a - cuts[place]) - Math.abs(b - cuts[place]))[0];
+  if (near === undefined) return toast('No other gap within 30 seconds of here.');
+  setCut(place, near);
+}
+
+function redrawSplit() {
+  const node = $('detail').querySelector('.split');
+  if (node) node.replaceWith(splitBlock(detail.data || detail.summary));
+}
+
+function waveform(peaks) {
+  const n = peaks.length, top = [], bottom = [];
+  peaks.forEach((value, i) => { const h = Math.max(0.5, value / 2); top.push(`${i},${50 - h}`); bottom.unshift(`${i},${50 + h}`); });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${Math.max(1, n - 1)} 100`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  const shape = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  shape.setAttribute('points', [...top, ...bottom].join(' '));
+  svg.append(shape);
+  return svg;
+}
+
+// How sure Encore is of a start: a chapter mark and a gap agreeing is best; a start from the track
+// lengths with no gap near it is a guess.
+function markBadge(split, cuts, place) {
+  const mark = split.marks[place];
+  if (Math.abs(cuts[place] - split.found[place]) > 0.05) return el('span', { class: 'badge-muted' }, 'Moved by you');
+  if (!mark || place === 0) return null;
+  if (mark.from === 'chapter') return mark.gap ? el('span', { class: 'badge-success' }, 'Timestamp and gap') : el('span', { class: 'badge-warning' }, 'No gap at the timestamp');
+  return mark.gap ? el('span', { class: 'badge-info' }, 'Gap found') : el('span', { class: 'badge-danger' }, 'Guess, no gap near');
+}
+
+function nudges(place, label) {
+  const step = (by, text) => el('button', { type: 'button', class: 'btn btn-ghost btn-sm split-step', 'aria-label': `${label}: ${text}`,
+    onclick: () => setCut(place, detail.cuts[place] + by) }, text);
+  return [step(-2, '−2s'), step(-0.5, '−½s'), step(0.5, '+½s'), step(2, '+2s'),
+    el('button', { type: 'button', class: 'btn btn-ghost btn-sm', title: 'Move to the nearest other gap', onclick: () => snap(place) }, 'Next gap')];
+}
+
+function playButton(key, label, from, to) {
+  return el('button', { type: 'button', class: 'btn-icon split-play', 'data-play': key, title: label, 'aria-label': label,
+    onclick: () => play(key, from, to) }, glyph('play', 'icon-sm'));
+}
+
+function splitRow(split, cuts, track, place, multi) {
+  const start = cuts[place], length = cuts[place + 1] - start, fit = FIT[fitOf(track.seconds, length)];
+  const chapter = track.chapter && track.chapter.toLowerCase() !== track.title.toLowerCase() ? el('small', { class: 'muted' }, `Timestamp: ${track.chapter}`) : null;
+  const join = place === 0 ? playButton('s0', `Play the start of ${track.title}`, start, start + 6)
+    : playButton(`s${place}`, `Play the join into ${track.title}`, start - 4, start + 4);
+  return el('li', { class: `split-track${detail.picked === place ? ' picked' : ''}`, 'data-place': place },
+    el('div', { class: 'split-left' },
+      el('span', { class: 'num muted' }, multi ? `${track.disc}.${track.number}` : track.number),
+      el('span', { class: 'track-title' }, track.title, chapter),
+      el('span', { class: 'time muted tabular' }, track.seconds ? clock(track.seconds) : '')),
+    el('div', { class: 'split-right' },
+      el('div', { class: 'row meta' },
+        join,
+        el('span', { class: 'small tabular split-at' }, `Starts ${fmt(start)}`),
+        el('span', { class: 'small muted tabular' }, `${clock(Math.round(length))} long`),
+        fit ? el('span', { class: fit[0] }, fit[1]) : null,
+        markBadge(split, cuts, place)),
+      el('div', { class: 'row split-steps' }, ...nudges(place, `Start of ${track.title}`))));
+}
+
+function splitMarker(split, cuts, place, label) {
+  const mark = el('button', { type: 'button', class: `split-mark${detail.picked === place ? ' on' : ''}`, style: `left:${cuts[place] / split.duration * 100}%`,
+    'aria-label': `${label}, ${fmt(cuts[place])}. Arrow keys move it.`, title: label }, el('span', {}, place === cuts.length - 1 ? 'End' : String(place + 1)));
+  mark.onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    setCut(place, cuts[place] + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 2 : 0.5));
+    $('detail').querySelector(`.split-mark[data-place="${place}"]`)?.focus();
+  };
+  mark.dataset.place = place;
+  mark.onclick = event => event.stopPropagation();
+  mark.onpointerdown = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const wave = mark.parentElement, box = wave.getBoundingClientRect();
+    mark.setPointerCapture(event.pointerId);
+    detail.picked = place;
+    mark.classList.add('on');
+    let moved = false;
+    mark.onpointermove = move => {
+      moved = true;
+      const [low, high] = limits(detail.cuts, place, split.duration);
+      const at = Math.min(high, Math.max(low, (move.clientX - box.left) / box.width * split.duration));
+      detail.cuts[place] = Math.round(at * 10) / 10;
+      mark.style.left = `${detail.cuts[place] / split.duration * 100}%`;
+    };
+    mark.onpointerup = mark.onpointercancel = () => {
+      mark.onpointermove = mark.onpointerup = mark.onpointercancel = null;
+      if (moved) setCut(place, detail.cuts[place]);
+      else {
+        redrawSplit();
+        $('detail').querySelector(`.split-track[data-place="${place}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    };
+  };
+  return mark;
+}
+
+function splitBlock(album) {
+  const head = el('h3', { class: 'h2' }, 'Check the tracks');
+  if (detail.splitError) return el('section', { class: 'detail-section split' }, head, note(detail.splitError, 'bad'));
+  if (!detail.split) return el('section', { class: 'detail-section split' }, head, note('Loading where each track starts…'));
+  const split = detail.split, cuts = detail.cuts, tracks = split.tracks, last = cuts.length - 1;
+  const how = split.source === 'chapters'
+    ? "Encore took each start from the timestamps in the video's description, then moved it to the nearest gap in the sound."
+    : "Encore worked out each start from the album's track lengths, then moved it to the nearest gap in the sound.";
+  const unsure = split.marks.filter((m, i) => i > 0 && !m.gap).length;
+  const wave = el('div', { class: 'split-wave', title: 'Click to play from here' }, waveform(split.peaks), el('div', { class: 'split-head', hidden: true }),
+    ...cuts.map((_, place) => splitMarker(split, cuts, place, place === last ? 'End of the last track' : `Start of ${tracks[place].title}`)));
+  wave.onclick = event => {
+    const box = wave.getBoundingClientRect();
+    play('wave', (event.clientX - box.left) / box.width * split.duration, null);
+  };
+  const multi = split.discs > 1;
+  const rows = tracks.map((track, place) => splitRow(split, cuts, track, place, multi));
+  const end = el('li', { class: `split-track${detail.picked === last ? ' picked' : ''}`, 'data-place': last },
+    el('div', { class: 'split-left' }, el('span', {}), el('span', { class: 'track-title muted' }, 'End of the album'), el('span', {})),
+    el('div', { class: 'split-right' },
+      el('div', { class: 'row meta' }, playButton('end', 'Play the end of the album', cuts[last] - 6, cuts[last]),
+        el('span', { class: 'small tabular split-at' }, `Ends ${fmt(cuts[last])}`),
+        cuts[last] < split.duration - 0.05 ? el('span', { class: 'badge-muted' }, `${clock(Math.round(split.duration - cuts[last]))} left off`) : null),
+      el('div', { class: 'row split-steps' }, ...nudges(last, 'End of the album').slice(0, 4))));
+  const changed = cuts.some((c, i) => Math.abs(c - split.found[i]) > 0.05);
+  const reset = btn('Undo my changes', () => { detail.cuts = [...split.found]; saveCuts(detail); redrawSplit(); }, 'ghost', { disabled: !changed || undefined });
+  const file = btn('File the album', event => fileSplit(album, event.currentTarget), 'primary');
+  return el('section', { class: 'detail-section split' }, head,
+    el('p', { class: 'small muted yt-intro' }, `${how} Play each join to hear that it's clean, and move any that are off with the buttons, the arrow keys or by dragging its marker. Nothing is cut until you press File the album.`),
+    ...split.warnings.map(text => el('div', { class: 'note split-warning' }, text)),
+    unsure ? el('div', { class: 'note split-warning' }, `${plural(unsure, 'start')} had no gap nearby. Listen to ${unsure === 1 ? 'that one' : 'those'} first.`) : null,
+    wave,
+    el('div', { class: 'row-between small muted tabular split-scale' }, el('span', {}, '0:00'), el('span', {}, clock(Math.round(split.duration)))),
+    el('div', { class: 'yt-bar' }, el('span', { class: 'small muted tabular yt-count' }, `${plural(tracks.length, 'track')} · ${split.job.source.title}`),
+      el('div', { class: 'row actions' }, reset, file)),
+    el('ol', { class: 'split-tracks' }, ...rows, end));
+}
+
+async function fileSplit(album, button) {
+  const opened = detail;
+  clearTimeout(saveTimer);
+  const done = await busy(button, () => api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts, file: true }) }));
+  if (done === undefined) return;
+  stopPlaying();
+  toast(`${album.title} is being cut into ${plural(opened.split.tracks.length, 'track')} and filed.`);
+  $('detail').close();
+  await refreshJobs();
 }
 
 function updateRow(album, key) {
@@ -497,6 +849,7 @@ async function queueYoutube(album, button) {
 // the popstate that causes.
 let albumEntry = false, skipPop = false;
 $('detail').onclose = () => {
+  stopPlaying();
   detail = null;
   if (albumEntry) {
     albumEntry = false;
@@ -524,7 +877,7 @@ function renderResults() {
 
 const stateText = {
   queued: 'Waiting', downloading: 'Downloading', verifying: 'Checking every track',
-  filing: 'Filing the album', scanning: 'Plex is scanning',
+  filing: 'Filing the album', scanning: 'Plex is scanning', review: 'Downloaded. Check where each track starts, then file it.',
 };
 const isRunning = job => ['downloading', 'verifying', 'filing', 'scanning'].includes(job.state);
 
@@ -540,9 +893,11 @@ function jobCard(job) {
   if (copying) state = `${stateText.filing}: ${job.step.toLowerCase()} · ${Math.round(job.percent)}%`;
   if (job.state === 'done' && job.quality) state += ` · ${job.quality}`;
   const buttons = [];
+  if (job.state === 'review') buttons.push(btn('Check the tracks', () => openSplit(job), 'primary'));
   if (job.state === 'failed') {
     const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
     if (job.kind === 'youtube') buttons.push(btn('Change links', () => openAlbum(album, false, 'youtube')));
+    else if (job.kind === 'youtube_album') buttons.push(btn('Change the video', () => openAlbum(album, false, 'youtube')));
     else if (job.kind !== 'video' && job.kind !== 'single') buttons.push(btn('Pick another', () => openAlbum(album)));
     buttons.push(btn('Retry', event => act(`/api/queue/${job.id}/retry`, 'POST', event.currentTarget)));
   }
@@ -631,11 +986,11 @@ async function saveOrder(focus) {
 
 function renderJobs() {
   if (dragging) return;
-  const running = jobs.filter(isRunning), waiting = jobs.filter(j => j.state === 'queued');
+  const running = jobs.filter(isRunning), waiting = jobs.filter(j => j.state === 'queued'), review = jobs.filter(j => j.state === 'review');
   const finished = jobs.filter(j => ['failed', 'done'].includes(j.state)).reverse();
   const part = text => el('h3', { class: 'eyebrow part-title' }, text);
   $('clearDone').hidden = !jobs.some(j => j.state === 'done');
-  setCount('queue', running.length + waiting.length);
+  setCount('queue', running.length + waiting.length + review.length);
   if (!jobs.length) {
     return $('jobs').replaceChildren(el('div', { class: 'queue-empty' },
       el('div', { class: 'empty-icon' }, glyph('download', 'icon')),
@@ -643,6 +998,7 @@ function renderJobs() {
       el('p', { class: 'small muted' }, 'Open an album, pick a download, and it waits here while it downloads, gets checked and filed.')));
   }
   $('jobs').replaceChildren(
+    ...(review.length ? [part('Waiting for you'), ...review.map(jobCard)] : []),
     ...(running.length ? [part('Now'), ...running.map(jobCard)] : []),
     ...(waiting.length ? [part('Up next'), ...waiting.map(jobCard)] : []),
     ...(finished.length ? [part('Finished'), ...finished.map(jobCard)] : []));

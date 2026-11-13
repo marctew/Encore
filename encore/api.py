@@ -40,7 +40,8 @@ EVENT_TYPES = ["job.queued", "download.started", "download.finished", "download.
 DISPLAY_SIZES = ["800x480", "1280x720", "1920x1080"]
 RUNNING = ("downloading", "verifying", "filing", "scanning")
 STATE_TEXT = {"queued": "Waiting", "downloading": "Downloading", "verifying": "Checking every track",
-              "filing": "Filing", "scanning": "Plex is scanning", "done": "Done", "failed": "Failed"}
+              "filing": "Filing", "scanning": "Plex is scanning", "done": "Done", "failed": "Failed",
+              "review": "Waiting for you to check where each track starts"}
 KEEP_EVENTS = 200
 WANTED_PAUSE = 2
 
@@ -144,7 +145,7 @@ def image_for(job):
 
 
 def job_item(job):
-    tone = {"failed": "danger", "done": "success", "queued": "muted"}.get(job["state"], "info")
+    tone = {"failed": "danger", "done": "success", "queued": "muted", "review": "warning"}.get(job["state"], "info")
     return {"id": f"job:{job['id']}", "title": f"{job['artist']} – {job['title']}", "subtitle": job_text(job),
             "at": iso(job.get("added")), "at_label": at_label(job.get("added")), "tone": tone, "image": image_for(job),
             "url": f"{base_url()}/queue",
@@ -167,6 +168,7 @@ def status_body():
     running = [j for j in jobs if j["state"] in RUNNING]
     waiting = [j for j in jobs if j["state"] == "queued"]
     failed = [j for j in jobs if j["state"] == "failed"]
+    review = [j for j in jobs if j["state"] == "review"]
     midnight = datetime.now(ZoneInfo(TIME_ZONE)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     arrived = s.store.one("SELECT COUNT(*) AS n FROM arrivals WHERE at >= ?", midnight)["n"]
     detail = None
@@ -182,6 +184,9 @@ def status_body():
     elif failed:
         state, headline = "warning", f"{len(failed)} download{'' if len(failed) == 1 else 's'} failed"
         detail = f"{failed[-1]['artist']} – {failed[-1]['title']}: {failed[-1].get('message') or 'failed'}"
+    elif review:
+        state, headline = "warning", f"{len(review)} album{'' if len(review) == 1 else 's'} to check"
+        detail = f"{review[0]['artist']} – {review[0]['title']}: check where each track starts, then file it"
     elif not s.sab.ready:
         state, headline = "warning", "SABnzbd isn't set up"
     else:
@@ -192,6 +197,7 @@ def status_body():
             "counts": [{"key": "downloading", "label": "Downloading", "value": len(running)},
                        {"key": "queued", "label": "Queued", "value": len(waiting)},
                        {"key": "failed", "label": "Failed", "value": len(failed), **({"tone": "danger"} if failed else {})},
+                       {"key": "to_check", "label": "To check", "value": len(review), **({"tone": "warning"} if review else {})},
                        {"key": "arrived_today", "label": "Arrived today", "value": arrived},
                        {"key": "wanted", "label": "Wanted", "value": len(s.store.wanted_ids())}],
             "url": f"{base_url()}/", "generated_at": iso(time.time()), "refresh_s": STATUS_REFRESH}
@@ -243,7 +249,8 @@ def page_of(rows, limit, at_of):
 
 def feed_downloads(limit):
     jobs = jobs_now()
-    ordered = [j for j in jobs if j["state"] in RUNNING] + [j for j in jobs if j["state"] == "queued"]
+    ordered = ([j for j in jobs if j["state"] in RUNNING] + [j for j in jobs if j["state"] == "review"]
+               + [j for j in jobs if j["state"] == "queued"])
     return [job_item(j) for j in ordered[:limit]], None
 
 

@@ -146,6 +146,38 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .yt-choices ul { margin: 4px 0 0; padding: 0; list-style: none; }
 .yt-choice { display: block; width: 100%; padding: 8px 4px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; font: inherit; cursor: pointer; }
 .yt-choice:hover, .yt-choice:focus-visible { background: rgb(var(--surface-2)); }
+.yt-mode { justify-self: start; width: max-content; max-width: 100%; margin-bottom: 12px; }
+.yt-whole { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid rgb(var(--border)); }
+.yt-chapters { display: flex; align-items: center; gap: 6px; }
+.yt-chapters.ok { color: rgb(var(--success)); }
+
+/* Checking where each track of a whole-album video starts */
+.split-warning { margin: 0 0 8px; }
+.split-wave { position: relative; height: 96px; margin-top: 8px; border: 1px solid rgb(var(--border)); border-radius: var(--r-md);
+  background: rgb(var(--surface-2) / 0.4); cursor: pointer; touch-action: pan-y; user-select: none; }
+.split-wave svg { position: absolute; inset: 8px 0; width: 100%; height: calc(100% - 16px); fill: rgb(var(--muted) / 0.45); }
+.split-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: rgb(var(--text)); pointer-events: none; }
+.split-mark { position: absolute; top: 0; bottom: 0; width: 20px; margin-left: -10px; padding: 0; border: 0; background: none; cursor: ew-resize; touch-action: none; }
+.split-mark::before { content: ""; position: absolute; top: 0; bottom: 0; left: 9px; width: 2px; background: rgb(var(--accent) / 0.6); }
+.split-mark span { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); min-width: 18px; padding: 0 4px; border-radius: var(--r-sm);
+  background: rgb(var(--surface)); box-shadow: inset 0 0 0 1px rgb(var(--border)); font: 500 11px/16px var(--font); color: rgb(var(--muted)); font-variant-numeric: tabular-nums; }
+.split-mark.on::before, .split-mark:focus-visible::before { background: rgb(var(--accent)); }
+.split-mark.on span { background: rgb(var(--accent)); box-shadow: none; color: rgb(var(--on-accent)); }
+.split-mark:focus-visible { outline: none; }
+.split-scale { margin-top: 4px; }
+.split-tracks { margin: 0; padding: 0; list-style: none; }
+.split-track { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; padding: 12px 8px; border-top: 1px solid rgb(var(--border));
+  border-radius: var(--r-sm); transition: background 150ms var(--ease); }
+.split-track.picked { background: rgb(var(--accent) / 0.08); }
+.split-left { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding-top: 6px; }
+.split-left .num { text-align: right; font-variant-numeric: tabular-nums; }
+.split-left small { display: block; font-size: 12px; }
+.split-right { display: grid; gap: 6px; min-width: 0; }
+.split-right .meta { gap: 8px; }
+.split-at { font-weight: 500; }
+.split-steps { gap: 4px; flex-wrap: wrap; }
+.split-step { min-width: 48px; font-variant-numeric: tabular-nums; }
+.split-play.playing { color: rgb(var(--accent)); background: rgb(var(--accent) / 0.15); }
 .job-kind { margin-left: 8px; vertical-align: 1px; }
 
 /* ---------------------------------------------------------- the queue */
@@ -234,6 +266,9 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
   .yt-input-row .input { font-size: 16px; }
   .single-search .input, .single-field .input { font-size: 16px; }
   .yt-bar .actions { margin-left: 0; }
+  .split-track { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 4px; }
+  .split-left { padding-top: 0; }
+  .yt-mode { width: 100%; }
   .queue-panel { padding: 12px; }
 }
 @media (pointer: coarse) { .btn-sm { min-height: 40px; } }
