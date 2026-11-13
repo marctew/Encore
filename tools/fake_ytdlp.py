@@ -5,6 +5,8 @@ real (tiny) mp4 files with ffmpeg, so everything after the download runs for rea
 videos.json: {"<id>": {"title", "channel", "duration", "fail": "<stderr text>", "slow": true,
                "description": "...", "chapters": [{"start_time", "end_time", "title"}],
                "segments": [[<Hz, or 0 for silence>, <seconds>], ...]}}
+playlists.json (optional): {"<list id>": {"title", "entries": ["<video id>" or "private", ...]}}
+
 With "-f ba..." (just the sound) the download is an .m4a, made from segments when it has them: a
 whole album with real gaps between its tracks.
 Every download is logged to FAKE_YT/downloads.log, and a slow one writes its pid to FAKE_YT/slow.pid.
@@ -24,7 +26,7 @@ def entry(video_id):
     video = VIDEOS[video_id]
     found = {"id": video_id, "title": video["title"], "channel": video["channel"], "duration": video["duration"]}
     if "-J" in sys.argv and "--flat-playlist" not in sys.argv:
-        for key in ("upload_date", "description", "chapters"):   # a flat search doesn't give these; a lookup does
+        for key in ("upload_date", "description", "chapters", "album", "artist", "release_year"):   # a lookup gives these; a flat list doesn't
             if video.get(key):
                 found[key] = video[key]
     return found
@@ -50,6 +52,15 @@ def main(args):
         print("ERROR: no URL after --", file=sys.stderr)
         return 2
     target = args[args.index("--") + 1]
+    if "playlist?list=" in target:
+        lists = json.loads((HOME / "playlists.json").read_text()) if (HOME / "playlists.json").exists() else {}
+        found = lists.get(target.rsplit("list=", 1)[-1])
+        if not found:
+            print("ERROR: [youtube:tab] The playlist does not exist.", file=sys.stderr)
+            return 1
+        entries = [{"id": "privatevid0", "title": "[Private video]", "duration": None} if i == "private" else entry(i) for i in found["entries"]]
+        print(json.dumps({"id": target.rsplit("list=", 1)[-1], "title": found["title"], "channel": None, "entries": entries}))
+        return 0
     if target.startswith("ytsearch"):
         print(json.dumps({"entries": [entry(i) for i in VIDEOS if not VIDEOS[i].get("fail")]}))
         return 0

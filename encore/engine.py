@@ -323,6 +323,22 @@ class Queue:
         self.wake.set()
         return job
 
+    def add_youtube_list(self, list_id, artist, title, year, tracks):
+        """A playlist that is an album MusicBrainz doesn't have: each video is one track, named by a person.
+        tracks: [{video, title, seconds, channel}] in order."""
+        rows = [{"key": f"1-{n + 1}", "disc": 1, "number": n + 1, "title": t["title"], "video": t["video"],
+                 "seconds": t["seconds"], "channel": t["channel"]} for n, t in enumerate(tracks)]
+        job = {"title": title, "artist": artist, "year": year, "cover": f"https://i.ytimg.com/vi/{rows[0]['video']}/mqdefault.jpg",
+               "album_id": f"yt-list-{list_id}", "id": uuid.uuid4().hex[:12], "kind": "youtube_list", "state": "queued",
+               "percent": 0, "message": "", "step": "", "fix_artist": True, "folder": "", "quality": "", "added": time.time(),
+               "partial": False, "tracks": len(rows), "source": {"type": "youtube", "free": True, "playlist": list_id, "tracks": rows}}
+        with self.lock:
+            self.jobs.append(job)
+            self.update()
+        self.tell(job, None)
+        self.wake.set()
+        return job
+
     def update(self, job=None, **changes):
         with self.lock:
             old = job.get("state") if job else None
@@ -453,6 +469,8 @@ class Queue:
             return self.process_youtube(job)
         if job.get("kind") == "youtube_album":
             return self.process_youtube_album(job)
+        if job.get("kind") == "youtube_list":
+            return self.process_youtube_list(job)
         if job.get("kind") == "single":
             return self.process_single(job)
         if job.get("kind") == "video":
@@ -709,15 +727,7 @@ class Queue:
             seconds = float((probe(target).get("format") or {}).get("duration") or 0)
             if abs(seconds - (end - start)) > 1.0:
                 raise JobFailed(f"{track_label(track)}: the cut came out {seconds:.0f} seconds long, not {end - start:.0f}.")
-            audio = mutagen.File(target, easy=True)
-            if audio.tags is None:
-                audio.add_tags()
-            audio["title"], audio["album"] = title, job["title"]
-            audio["artist"] = audio["albumartist"] = job["artist"]
-            audio["tracknumber"], audio["discnumber"] = f"{place + 1}/{len(titles)}", "1/1"
-            if job.get("year"):
-                audio["date"] = job["year"]
-            audio.save()
+            tag_typed(target, job, title, place, len(titles))
             files.append(target)
         thumbnail_cover(self.brainz.web, source["video"], album_dir, files)
         rates = [getattr(mutagen.File(path).info, "bitrate", 0) for path in files]
@@ -727,6 +737,64 @@ class Queue:
         self.update(job, state="filing", message="Filing the album.", step="")
         self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
         job["kept"] = False
+
+    def process_youtube_list(self, job):
+        """A playlist of an album MusicBrainz doesn't have: each video's sound is one track, as YouTube has it,
+        tagged from what the person typed, with the first video's thumbnail as the cover. A track that fails
+        keeps the others downloaded, so a retry only fetches what's missing."""
+        tracks = job["source"]["tracks"]
+        folder = DOWNLOADS / "encore-youtube" / job["id"]
+        make_folder(DOWNLOADS)
+        need = sum(t.get("seconds") or 300 for t in tracks) * 40000
+        if shutil.disk_usage(DOWNLOADS).free < need * 2 + MIN_FREE:
+            raise JobFailed("Not enough free space on the share for this album.")
+        self.update(job, storage=str(folder))
+        sounds = self.fetch_sounds(job, tracks, folder)
+        self.check_cancel(job)
+        self.update(job, state="verifying", message="Checking every track.", step="", percent=100)
+        album_dir = folder / filing.safe(f"{job['artist']} - {job['title']} [{job['id']}]")
+        shutil.rmtree(album_dir, ignore_errors=True)
+        album_dir.mkdir(parents=True)
+        files = []
+        for place, track in enumerate(tracks):
+            self.check_cancel(job)
+            target = album_dir / track_file(track, False)
+            youtube_audio(sounds[track["key"]], target, track_label(track), track.get("seconds"))
+            tag_typed(target, job, track["title"], place, len(tracks))
+            files.append(target)
+        thumbnail_cover(self.brainz.web, tracks[0]["video"], album_dir, files)
+        rates = [getattr(mutagen.File(path).info, "bitrate", 0) for path in files]
+        job["quality"] = f"YouTube AAC {min(rates) // 1000}" if rates and min(rates) else "YouTube AAC"
+        self.check_cancel(job)
+        self.update(job, state="filing", message="Filing the album.", step="")
+        self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
+
+    def fetch_sounds(self, job, tracks, folder):
+        """Downloads each track's sound alone, skipping any already here from an earlier try."""
+        sounds = {}
+        for place, track in enumerate(tracks):
+            self.check_cancel(job)
+            share = 100 / len(tracks)
+            self.update(job, step=f"YouTube track {place + 1} of {len(tracks)}", percent=round(place * share, 1))
+            path = next((p for p in folder.glob(f"{track['video']}.*") if p.suffix in (".m4a", ".webm", ".opus", ".mp4")), None)
+            if not path:
+                shown = [0.0]
+
+                def progress(value, base=place * share):
+                    overall = round(base + value * share / 100, 1)
+                    if overall - shown[0] >= 1:
+                        shown[0] = overall
+                        self.update(job, percent=overall)
+
+                try:
+                    path = self.youtube.download(track["video"], folder, progress, lambda: job.get("cancel"), audio=True)
+                except SourceError as error:
+                    raise TrackFailed(f"{track_label(track)}: {error}. Retry, or take it out of the playlist's album.") from None
+                if path is None:
+                    self.check_cancel(job)
+                    raise Cancelled
+            sounds[track["key"]] = path
+        return sounds
 
     def split_plan(self, job):
         """The saved plan for a whole-album job that's waiting to be checked (or has failed after it)."""
@@ -1073,6 +1141,19 @@ def youtube_audio(video, target, label, expected):
     if made.returncode != 0 or not decode_ok(target):
         raise JobFailed(f"{label}: Encore couldn't take the sound out of the video.")
     return seconds
+
+
+def tag_typed(path, job, title, place, count):
+    """Tags for an album MusicBrainz doesn't have, from what the person typed."""
+    audio = mutagen.File(path, easy=True)
+    if audio.tags is None:
+        audio.add_tags()
+    audio["title"], audio["album"] = title, job["title"]
+    audio["artist"] = audio["albumartist"] = job["artist"]
+    audio["tracknumber"], audio["discnumber"] = f"{place + 1}/{count}", "1/1"
+    if job.get("year"):
+        audio["date"] = job["year"]
+    audio.save()
 
 
 def add_cover(web, album_id, folder, files):

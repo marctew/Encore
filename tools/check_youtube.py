@@ -23,7 +23,7 @@ from mutagen.mp4 import MP4  # noqa: E402
 
 from encore import api, engine, split  # noqa: E402
 from encore import web as server  # noqa: E402
-from encore.youtube import description_chapters, description_tracks, youtube_id  # noqa: E402
+from encore.youtube import description_chapters, description_tracks, playlist_id, youtube_id  # noqa: E402
 
 results = []
 HEAD = {"X-Encore": "1"}
@@ -53,6 +53,17 @@ SEGMENTS = [[440, 20], [0, 1.5], [550, 19], [0, 0.8], [550, 20.2], [660, 25], [0
 FREE_SEGMENTS = [[300, 40], [0, 2], [350, 19], [0, 0.6], [350, 20], [0, 2], [400, 40], [0, 2], [450, 40], [0, 2], [500, 40]]
 FREE_STARTS = [0, 41, 82.6, 124.6, 166.6, 207.6]
 FREE_NAMES = ["Wild Rover", "Leave it Lay", "Tim Finnegans Wake", "Wild Sky", "Spanish Lady"]
+# A YouTube Music album: Topic uploads, the first knowing its album, artist and year, and one gone private.
+ALBUM_LIST = "OLAK5uy_testalbumplaylist0001"
+BROKEN_LIST = "PLtestbrokenplaylist0001"
+VIDEOS.update({
+    "listtrack01": {"title": "Look Where", "channel": "Colum Test - Topic", "duration": 7, "album": "Look Where", "artist": "Colum Test",
+                    "release_year": 2009, "upload_date": "20150822"},
+    "listtrack02": {"title": "Beyond The Frame", "channel": "Colum Test - Topic", "duration": 8},
+    "listtrack03": {"title": "Fresh Bread", "channel": "Colum Test - Topic", "duration": 9},
+})
+PLAYLISTS = {ALBUM_LIST: {"title": "Album - Look Where", "entries": ["listtrack01", "private", "listtrack02", "listtrack03"]},
+             BROKEN_LIST: {"title": "My mix", "entries": ["listtrack01", "brokenvide0"]}}
 VIDEOS.update({
     "freealbum01": {"title": '"Busking On" Full Album~Free Busker~*~', "channel": "Some Uploader", "duration": 208, "segments": FREE_SEGMENTS,
                     "upload_date": "20190304",
@@ -122,6 +133,7 @@ def wait(queue, job_id, states=("done", "failed")):
 def main():
     FAKE.mkdir(parents=True)
     (FAKE / "videos.json").write_text(json.dumps(VIDEOS))
+    (FAKE / "playlists.json").write_text(json.dumps(PLAYLISTS))
     music, imports, downloads_dir = ROOT / "Music", ROOT / "Import", ROOT / "Encore"
     for folder in (music, imports, downloads_dir):
         folder.mkdir()
@@ -362,6 +374,7 @@ def main():
 
     check_whole(client, s, music, downloads_dir)
     check_free(client, s, music, downloads_dir)
+    check_playlist(client, s, music, downloads_dir)
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return 0 if all(results) else 1
@@ -583,6 +596,66 @@ def check_free(client, s, music, downloads_dir):
     plan = split.plan_free(levels, 3, [])
     expect("too few gaps: the rest go halfway and are marked", plan["cuts"][1] == 31.0 and len(plan["cuts"]) == 4
            and [m["gap"] for m in plan["marks"][1:]] == [True, False] and "put halfway" in plan["warnings"][0], (plan["cuts"], plan["warnings"]))
+
+
+def check_playlist(client, s, music, downloads_dir):
+    """A playlist that's an album MusicBrainz doesn't have: each video one track, named by hand."""
+    links = {f"https://www.youtube.com/playlist?list={ALBUM_LIST}": ALBUM_LIST,
+             f"https://music.youtube.com/playlist?list={ALBUM_LIST}&si=abc": ALBUM_LIST,
+             f"https://www.youtube.com/watch?v=listtrack01&list={ALBUM_LIST}": ALBUM_LIST,
+             "https://www.youtube.com/watch?v=listtrack01&list=PLsomeonesmixplaylist01": None,
+             f"https://evil.example/playlist?list={ALBUM_LIST}": None,
+             "https://www.youtube.com/playlist?list=PL;rm -rf": None, ALBUM_LIST: ALBUM_LIST}
+    read = {link: playlist_id(link) for link in links}
+    expect("playlist links are read, and a mix in a watch link isn't taken for an album", read == links, read)
+
+    s.queue.jobs.clear()
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    found = client.post("/api/youtube/album", json={"url": f"https://music.youtube.com/playlist?list={ALBUM_LIST}"}, headers=HEAD).get_json()
+    playlist = found.get("playlist") or {}
+    expect("the playlist is looked up, leaving out the private video", [e["id"] for e in playlist.get("entries", [])]
+           == ["listtrack01", "listtrack02", "listtrack03"] and playlist.get("missing") == 1, playlist)
+    expect("the album, artist and year come from YouTube Music", found.get("guess") == {"artist": "Colum Test", "title": "Look Where",
+           "year": "2009", "tracks": ["Look Where", "Beyond The Frame", "Fresh Bread"]}, found.get("guess"))
+    missing = client.post("/api/youtube/album", json={"url": "https://www.youtube.com/playlist?list=PLnosuchplaylist000"}, headers=HEAD)
+    expect("a missing playlist says so", missing.status_code == 503, missing.get_data(as_text=True))
+
+    queue_it = lambda tracks, **body: client.post("/api/queue/youtube/free", headers=HEAD, json={  # noqa: E731
+        "playlist": ALBUM_LIST, "artist": "Colum Test", "title": "Look Where", "year": "2009", "tracks": tracks, **body})
+    expect("no tracks is refused", queue_it([]).status_code == 400)
+    expect("a video that isn't known is refused", queue_it([{"video": "zzzzzzzzzzz", "title": "X"}]).status_code == 409)
+    expect("the same video twice is refused", queue_it([{"video": "listtrack01", "title": "A"}, {"video": "listtrack01", "title": "B"}]).status_code == 409)
+    expect("a bad playlist id is refused", queue_it([{"video": "listtrack01", "title": "A"}], playlist="nope").status_code == 400)
+    kept = [{"video": "listtrack01", "title": "Look Where"}, {"video": "listtrack03", "title": "Fresh Bread (Live)"}]
+    job = queue_it(kept).get_json()
+    expect("can't queue it twice", queue_it(kept).status_code == 409)
+    job = wait(s.queue, job["id"])
+    expect("the album is filed as Artist/Album (Year)", job["state"] == "done" and job.get("folder") == "Colum Test/Look Where (2009)",
+           (job["message"], job.get("folder")))
+    folder = music / "Colum Test" / "Look Where (2009)"
+    names = sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+    expect("tracks numbered in order, with the left-out one gone", names == ["01 - Look Where.m4a", "02 - Fresh Bread (Live).m4a", "cover.jpg"], names)
+    tags = MP4(folder / "02 - Fresh Bread (Live).m4a") if names else {}
+    expect("tagged from what was typed", tags.get("\xa9alb") == ["Look Where"] and tags.get("aART") == ["Colum Test"]
+           and tags.get("trkn") == [(2, 2)] and tags.get("\xa9day") == ["2009"] and bool(tags.get("covr")), dict(tags or {}).keys())
+    expect("each track's length is its video's", names and near(MP4(folder / names[1]).info.length, 9, 0.2))
+    expect("only the sound of the kept videos was downloaded", downloads() == ["listtrack01", "listtrack03"]
+           and not any(downloads_dir.rglob("*.m4a")), downloads())
+    expect("it's marked as from YouTube with no MusicBrainz cover", job["kind"] == "youtube_list" and job["quality"].startswith("YouTube AAC"))
+
+    # A video that won't download: the rest stay, and a retry doesn't fetch them again
+    s.queue.jobs.clear()
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    client.post("/api/youtube/album", json={"url": f"https://www.youtube.com/playlist?list={BROKEN_LIST}"}, headers=HEAD)
+    body = {"playlist": BROKEN_LIST, "artist": "Mixed", "title": "Mix", "year": "",
+            "tracks": [{"video": "listtrack01", "title": "One"}, {"video": "brokenvide0", "title": "Two"}]}
+    job = wait(s.queue, client.post("/api/queue/youtube/free", headers=HEAD, json=body).get_json()["id"])
+    expect("the track that failed is named", job["state"] == "failed" and job["message"].startswith("Track 2 (“Two”): YouTube refused"), job["message"])
+    expect("the other track's download is kept", job.get("kept") and (Path(s.queue.get(job["id"])["storage"]) / "listtrack01.m4a").exists())
+    client.post(f"/api/queue/{job['id']}/retry", headers=HEAD)
+    job = wait(s.queue, job["id"])
+    expect("a retry only fetches what's missing", downloads() == ["listtrack01", "brokenvide0", "brokenvide0"], downloads())
+    client.delete(f"/api/queue/{job['id']}", headers=HEAD)
 
 
 if __name__ == "__main__":
