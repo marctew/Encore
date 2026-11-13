@@ -185,6 +185,12 @@ function renderDetail(force = false) {
   // The builder keeps its own rows, so the queue's refresh doesn't wipe a link half typed.
   if (detail.view === 'youtube' && !force && $('detail').querySelector('.yt-builder')) return refreshYoutubeBar();
   if (detail.view === 'split' && !force && $('detail').querySelector('.split')) return;
+  if (detail.view === 'free') {
+    if (!force && $('detail').querySelector('.free')) return;
+    return $('detail').replaceChildren(
+      el('button', { type: 'button', class: 'btn-icon dialog-close', 'aria-label': 'Close', title: 'Close', onclick: () => $('detail').close() }, glyph('x', 'icon')),
+      el('div', { class: 'detail' }, freeBlock()));
+  }
   const album = detail.data || detail.summary;
   const switchView = ['youtube', 'split'].includes(detail.view)
     ? btn('Back to downloads', () => showAlbumView(album))
@@ -201,7 +207,7 @@ function renderDetail(force = false) {
       album.editions > 1 ? el('div', { class: 'small muted' }, `${album.editions} editions are known, and a download can fit any of them.`) : null,
       ownedNote(album),
       el('div', { class: 'row actions' }, wantButton(album),
-        detail.data && !detail.error ? switchView : null,
+        detail.data && !detail.error && !detail.free ? switchView : null,
         plexLink(album.plex_url, album.title),
         album.saved_at ? btn('Refresh tracks', () => openAlbum(album, true, detail.view, detail.fillJob)) : null),
       album.saved_at ? el('div', { class: 'small faint' }, `Saved ${ago(album.saved_at)}`) : null))];
@@ -217,16 +223,8 @@ function renderDetail(force = false) {
 
 async function openAlbum(album, refresh = false, startIn = 'album', fillJob = null) {
   detail = { summary: album, view: startIn, fillJob };
-  confirming = null;
   const opened = detail;
-  renderDetail(true);
-  if (!$('detail').open) {
-    $('detail').showModal();
-    // A history entry for the open window, so the phone's back gesture (or Back) closes it.
-    history.pushState({ ...(history.state || {}), album: true }, '', location.href);
-    albumEntry = true;
-  }
-  $('detail').scrollTop = 0;
+  openDialog();
   try {
     opened.data = await api(`/api/album/${album.id}${refresh ? '?refresh=1' : ''}`);
   } catch (error) {
@@ -237,6 +235,108 @@ async function openAlbum(album, refresh = false, startIn = 'album', fillJob = nu
   if (opened.view === 'youtube') return loadYoutube(opened.data);
   if (opened.view === 'split') return loadSplit(opened);
   await loadDownloads(opened, album);
+}
+
+function openDialog() {
+  confirming = null;
+  renderDetail(true);
+  if (!$('detail').open) {
+    $('detail').showModal();
+    // A history entry for the open window, so the phone's back gesture (or Back) closes it.
+    history.pushState({ ...(history.state || {}), album: true }, '', location.href);
+    albumEntry = true;
+  }
+  $('detail').scrollTop = 0;
+}
+
+// ------------------------------------------------------------------ an album MusicBrainz doesn't have
+// One YouTube video, named by hand: Encore guesses the names from the title and description.
+
+function openFree() {
+  detail = { view: 'free', summary: { id: '', title: 'Album from YouTube' }, free: true, freeVideo: null, freeForm: null };
+  openDialog();
+  setTimeout(() => $('detail').querySelector('.free .yt-url')?.focus(), 50);
+}
+
+function freeBlock() {
+  const video = detail.freeVideo, form = detail.freeForm, working = detail.freeBusy;
+  const input = el('input', { class: 'input yt-url', type: 'url', inputmode: 'url', placeholder: 'Paste the YouTube link',
+    value: detail.freeTyped ?? (video ? watchUrl(video.id) : ''), disabled: working || undefined, 'aria-label': 'YouTube link for the whole album' });
+  let sent = false;
+  const commit = () => { if (sent || !input.value.trim()) return; sent = true; lookupFree(input.value.trim()); };
+  input.onchange = commit;
+  input.onpaste = () => setTimeout(commit, 0);
+  input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } };
+  const parts = [
+    el('h2', { class: 'h1 detail-title' }, 'Album from YouTube'),
+    el('p', { class: 'small muted yt-intro' }, "For a whole album in one YouTube video, when MusicBrainz doesn't have the album (or the artist). Encore takes its sound, finds where each track starts from the video's chapters or the gaps between songs, and asks you to check before it cuts and files anything. It's filed as Artist/Album (Year), tagged from what you type here, with the video's thumbnail as the cover. The sound is AAC, as YouTube has it."),
+    el('div', { class: 'yt-input-row' }, input),
+    working ? el('div', { class: 'small muted yt-status' }, 'Looking it up…') : null,
+    detail.freeError ? el('div', { class: 'why' }, `${detail.freeError}.`.replace(/\.\.$/, '.')) : null];
+  if (video && !working) parts.push(videoCard(video, true));
+  if (form && !working) {
+    const field = (label, key, attrs = {}) => {
+      const box = el('input', { class: 'input', value: form[key], 'aria-label': label, ...attrs });
+      box.oninput = () => { form[key] = box.value; };
+      return el('label', { class: 'field free-field' }, el('span', { class: 'label' }, label), box);
+    };
+    const list = el('textarea', { class: 'input free-tracks', rows: Math.min(16, Math.max(6, form.tracks.split('\n').length + 1)),
+      'aria-label': 'Track names, one on each line', placeholder: 'One track on each line' });
+    list.value = form.tracks;
+    list.oninput = () => { form.tracks = list.value; refreshFreeCount(); };
+    const job = detail.freeJob || jobs.find(j => j.album_id === `yt-album-${video.id}` && !['done', 'failed'].includes(j.state));
+    const queue = btn(job ? 'In the queue' : 'Queue', event => queueFree(event.currentTarget), 'primary', { disabled: !!job || undefined });
+    parts.push(
+      el('div', { class: 'free-grid' }, field('Artist', 'artist'), field('Album', 'title'),
+        field('Year', 'year', { inputmode: 'numeric', maxlength: 4, placeholder: 'Blank if unknown', class: 'input free-year' })),
+      el('label', { class: 'field free-field' }, el('span', { class: 'label' }, 'Tracks'), list,
+        el('span', { class: 'hint free-count' }, freeCount(form.tracks, video))),
+      el('div', { class: 'yt-bar' }, el('span', {}), el('div', { class: 'row actions' }, queue)));
+  }
+  return el('section', { class: 'free' }, ...parts);
+}
+
+function trackNames(text) {
+  return text.split('\n').map(line => line.trim()).filter(Boolean);
+}
+
+function freeCount(text, video) {
+  const names = trackNames(text), chapters = (video.chapters || []).length;
+  if (!names.length) return "Leave it empty and Encore decides how many tracks there are from the gaps. You name them when you check them.";
+  const how = chapters === names.length ? `The video has ${plural(chapters, 'chapter')}, one for each, so Encore starts from those.` : 'Encore finds that many starts at the longest gaps in the sound.';
+  return `${plural(names.length, 'track')}. ${how}`;
+}
+
+function refreshFreeCount() {
+  const hint = $('detail').querySelector('.free-count');
+  if (hint && detail.freeForm) hint.textContent = freeCount(detail.freeForm.tracks, detail.freeVideo);
+}
+
+async function lookupFree(url) {
+  const opened = detail;
+  Object.assign(opened, { freeBusy: true, freeError: null, freeTyped: url });
+  renderDetail(true);
+  try {
+    const found = await api('/api/youtube/album', { method: 'POST', body: JSON.stringify({ url }) });
+    const guess = found.guess;
+    Object.assign(opened, { freeVideo: found.video, freeJob: found.job, freeTyped: undefined,
+      freeForm: { artist: guess.artist, title: guess.title, year: guess.year, tracks: guess.tracks.join('\n') } });
+  } catch (error) {
+    opened.freeError = error.message;
+  }
+  opened.freeBusy = false;
+  if (detail === opened) renderDetail(true);
+}
+
+async function queueFree(button) {
+  const opened = detail, form = opened.freeForm, video = opened.freeVideo;
+  const names = trackNames(form.tracks);
+  const added = await busy(button, () => api('/api/queue/youtube/free', { method: 'POST',
+    body: JSON.stringify({ video: video.id, artist: form.artist, title: form.title, year: form.year.trim(), tracks: names }) }));
+  if (added === undefined) return;
+  toast(`${form.title} is in the queue. Once it's downloaded, Encore asks you to check the tracks.`);
+  $('detail').close();
+  await refreshJobs();
 }
 
 async function loadDownloads(opened, album) {
@@ -391,9 +491,9 @@ function youtubeModes() {
 
 function chapterNote(video, tracks) {
   const count = (video.chapters || []).length;
-  if (count === tracks) return el('div', { class: 'small yt-chapters ok' }, glyph('check', 'icon-sm'), `${plural(count, 'timestamp')} in the description, one for each track.`);
-  if (count) return el('div', { class: 'note' }, `${plural(count, 'timestamp')} in the description for ${plural(tracks, 'track')}, so Encore will go by the track lengths and the gaps instead.`);
-  return el('div', { class: 'small muted' }, 'No timestamps in the description, so Encore will go by the track lengths and the gaps.');
+  if (count === tracks) return el('div', { class: 'small yt-chapters ok' }, glyph('check', 'icon-sm'), `${plural(count, 'chapter')} on the video, one for each track.`);
+  if (count) return el('div', { class: 'note' }, `The video has ${plural(count, 'chapter')} for ${plural(tracks, 'track')}, so Encore will go by the track lengths and the gaps instead.`);
+  return el('div', { class: 'small muted' }, 'No chapters or timestamps on the video, so Encore will go by the track lengths and the gaps.');
 }
 
 function wholeBlock(album) {
@@ -503,14 +603,22 @@ const fitOf = (listed, seconds) => {
 const SHORTEST = 1;
 
 function openSplit(job) {
-  openAlbum({ id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover }, false, 'split', job.id);
+  const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
+  if (!(job.source && job.source.free)) return openAlbum(album, false, 'split', job.id);
+  // No MusicBrainz album to load: the job says all the page shows of it.
+  detail = { summary: album, data: album, view: 'split', fillJob: job.id, free: true };
+  openDialog();
+  loadSplit(detail);
 }
 
 async function loadSplit(opened) {
   try {
-    opened.split = await api(`/api/queue/${opened.fillJob}/split`);
-    opened.cuts = [...opened.split.cuts];
+    const split = opened.split = await api(`/api/queue/${opened.fillJob}/split`);
+    opened.cuts = [...split.cuts];
+    opened.marks = [...split.marks];
+    opened.titles = split.free ? [...split.titles] : null;
     opened.picked = 1;
+    opened.cursor = null;
   } catch (error) {
     opened.splitError = error.message;
   }
@@ -536,7 +644,7 @@ function play(key, from, to) {
   const duration = detail.split.duration;
   audio.currentTime = Math.max(0, from);
   audio.play().catch(() => { toast("Couldn't play the album's sound", 'error'); stopPlaying(); });
-  playing = { key, frame: 0 };
+  playing = { key, frame: 0, from };
   document.querySelector(`.split [data-play="${key}"]`)?.classList.add('playing');
   const tick = () => {
     if (!playing) return;
@@ -552,7 +660,7 @@ let saveTimer = null;
 function saveCuts(opened) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { await api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts }) }); }
+    try { await api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts, titles: opened.titles }) }); }
     catch (error) { toast(error.message, 'error'); }
   }, 600);
 }
@@ -564,6 +672,7 @@ function limits(cuts, place, duration) {
 function setCut(place, value, redraw = true) {
   const cuts = detail.cuts, [low, high] = limits(cuts, place, detail.split.duration);
   cuts[place] = Math.round(Math.min(high, Math.max(low, value)) * 10) / 10;
+  if (place < detail.marks.length) detail.marks[place] = { from: 'you', gap: false, moved: 0 };
   detail.picked = place;
   saveCuts(detail);
   if (redraw) redrawSplit();
@@ -596,13 +705,39 @@ function waveform(peaks) {
 }
 
 // How sure Encore is of a start: a chapter mark and a gap agreeing is best; a start from the track
-// lengths with no gap near it is a guess.
-function markBadge(split, cuts, place) {
-  const mark = split.marks[place];
-  if (Math.abs(cuts[place] - split.found[place]) > 0.05) return el('span', { class: 'badge-muted' }, 'Moved by you');
-  if (!mark || place === 0) return null;
+// lengths (or put halfway, with no track lengths) with no gap near it is a guess.
+function markBadge(place) {
+  const mark = detail.marks[place];
+  if (!mark) return null;
+  if (mark.from === 'you') return el('span', { class: 'badge-muted' }, 'Set by you');
+  if (place === 0) return null;
   if (mark.from === 'chapter') return mark.gap ? el('span', { class: 'badge-success' }, 'Timestamp and gap') : el('span', { class: 'badge-warning' }, 'No gap at the timestamp');
   return mark.gap ? el('span', { class: 'badge-info' }, 'Gap found') : el('span', { class: 'badge-danger' }, 'Guess, no gap near');
+}
+
+// An album without MusicBrainz can gain or lose tracks: join one with the next, or split where it's playing.
+function joinNext(place) {
+  detail.cuts.splice(place + 1, 1);
+  detail.marks.splice(place + 1, 1);
+  detail.titles.splice(place + 1, 1);
+  detail.picked = place;
+  saveCuts(detail);
+  redrawSplit();
+}
+
+function splitHere() {
+  // Until the sound has loaded the playhead reads 0, so it's never taken as earlier than where play started.
+  const at = Math.round((playing ? Math.max(audio.currentTime, playing.from) : detail.cursor ?? -1) * 10) / 10;
+  const cuts = detail.cuts, after = cuts.findIndex(c => c > at);
+  if (at < 0) return toast('Click the waveform where the new track starts, or play it and press this as it starts.');
+  if (after <= 0 || at - cuts[after - 1] < SHORTEST || cuts[after] - at < SHORTEST) return toast('Too close to another track start.');
+  cuts.splice(after, 0, at);
+  detail.marks.splice(after, 0, { from: 'you', gap: false, moved: 0 });
+  detail.titles.splice(after, 0, '');
+  detail.picked = after;
+  saveCuts(detail);
+  redrawSplit();
+  toast(`New track at ${fmt(at)}. Give it a name.`);
 }
 
 function nudges(place, label) {
@@ -617,15 +752,23 @@ function playButton(key, label, from, to) {
     onclick: () => play(key, from, to) }, glyph('play', 'icon-sm'));
 }
 
+function splitTitle(track, place) {
+  if (!detail.free) return el('span', { class: 'track-title' }, track.title,
+    track.chapter && track.chapter.toLowerCase() !== track.title.toLowerCase() ? el('small', { class: 'muted' }, `Timestamp: ${track.chapter}`) : null);
+  const input = el('input', { class: 'input split-name', value: detail.titles[place], placeholder: `Track ${place + 1}`, maxlength: 200,
+    'aria-label': `Name of track ${place + 1}` });
+  input.oninput = () => { detail.titles[place] = input.value; saveCuts(detail); };
+  return input;
+}
+
 function splitRow(split, cuts, track, place, multi) {
   const start = cuts[place], length = cuts[place + 1] - start, fit = FIT[fitOf(track.seconds, length)];
-  const chapter = track.chapter && track.chapter.toLowerCase() !== track.title.toLowerCase() ? el('small', { class: 'muted' }, `Timestamp: ${track.chapter}`) : null;
   const join = place === 0 ? playButton('s0', `Play the start of ${track.title}`, start, start + 6)
     : playButton(`s${place}`, `Play the join into ${track.title}`, start - 4, start + 4);
   return el('li', { class: `split-track${detail.picked === place ? ' picked' : ''}`, 'data-place': place },
     el('div', { class: 'split-left' },
       el('span', { class: 'num muted' }, multi ? `${track.disc}.${track.number}` : track.number),
-      el('span', { class: 'track-title' }, track.title, chapter),
+      splitTitle(track, place),
       el('span', { class: 'time muted tabular' }, track.seconds ? clock(track.seconds) : '')),
     el('div', { class: 'split-right' },
       el('div', { class: 'row meta' },
@@ -633,8 +776,10 @@ function splitRow(split, cuts, track, place, multi) {
         el('span', { class: 'small tabular split-at' }, `Starts ${fmt(start)}`),
         el('span', { class: 'small muted tabular' }, `${clock(Math.round(length))} long`),
         fit ? el('span', { class: fit[0] }, fit[1]) : null,
-        markBadge(split, cuts, place)),
-      el('div', { class: 'row split-steps' }, ...nudges(place, `Start of ${track.title}`))));
+        markBadge(place)),
+      el('div', { class: 'row split-steps' }, ...nudges(place, `Start of ${track.title}`),
+        detail.free && place < cuts.length - 2 ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', title: 'Make this and the next track one',
+          onclick: () => joinNext(place) }, 'Join with next') : null)));
 }
 
 function splitMarker(split, cuts, place, label) {
@@ -679,16 +824,26 @@ function splitBlock(album) {
   const head = el('h3', { class: 'h2' }, 'Check the tracks');
   if (detail.splitError) return el('section', { class: 'detail-section split' }, head, note(detail.splitError, 'bad'));
   if (!detail.split) return el('section', { class: 'detail-section split' }, head, note('Loading where each track starts…'));
-  const split = detail.split, cuts = detail.cuts, tracks = split.tracks, last = cuts.length - 1;
-  const how = split.source === 'chapters'
-    ? "Encore took each start from the timestamps in the video's description, then moved it to the nearest gap in the sound."
-    : "Encore worked out each start from the album's track lengths, then moved it to the nearest gap in the sound.";
-  const unsure = split.marks.filter((m, i) => i > 0 && !m.gap).length;
-  const wave = el('div', { class: 'split-wave', title: 'Click to play from here' }, waveform(split.peaks), el('div', { class: 'split-head', hidden: true }),
+  const split = detail.split, cuts = detail.cuts, last = cuts.length - 1;
+  const tracks = detail.free
+    ? detail.titles.map((title, n) => ({ key: `1-${n + 1}`, disc: 1, number: n + 1, title: title || `Track ${n + 1}`, seconds: 0, chapter: '' }))
+    : split.tracks;
+  const how = {
+    chapters: "Encore took each start from the video's chapters (the timestamps in its description), then moved it to the nearest gap in the sound.",
+    lengths: "Encore worked out each start from the album's track lengths, then moved it to the nearest gap in the sound.",
+    gaps: "There are no track lengths for this album, so Encore split it at the longest gaps in the sound.",
+  }[split.source];
+  const unsure = detail.marks.filter((m, i) => i > 0 && m.from !== 'you' && !m.gap).length;
+  const cursor = detail.free && detail.cursor != null ? el('div', { class: 'split-cursor', style: `left:${detail.cursor / split.duration * 100}%` }) : null;
+  const wave = el('div', { class: 'split-wave', title: 'Click to play from here' }, waveform(split.peaks), cursor, el('div', { class: 'split-head', hidden: true }),
     ...cuts.map((_, place) => splitMarker(split, cuts, place, place === last ? 'End of the last track' : `Start of ${tracks[place].title}`)));
   wave.onclick = event => {
-    const box = wave.getBoundingClientRect();
-    play('wave', (event.clientX - box.left) / box.width * split.duration, null);
+    const box = wave.getBoundingClientRect(), at = (event.clientX - box.left) / box.width * split.duration;
+    detail.cursor = at;
+    const line = wave.querySelector('.split-cursor');
+    if (line) line.style.left = `${at / split.duration * 100}%`;
+    else if (detail.free) wave.prepend(el('div', { class: 'split-cursor', style: `left:${at / split.duration * 100}%` }));
+    play('wave', at, null);
   };
   const multi = split.discs > 1;
   const rows = tracks.map((track, place) => splitRow(split, cuts, track, place, multi));
@@ -699,27 +854,33 @@ function splitBlock(album) {
         el('span', { class: 'small tabular split-at' }, `Ends ${fmt(cuts[last])}`),
         cuts[last] < split.duration - 0.05 ? el('span', { class: 'badge-muted' }, `${clock(Math.round(split.duration - cuts[last]))} left off`) : null),
       el('div', { class: 'row split-steps' }, ...nudges(last, 'End of the album').slice(0, 4))));
-  const changed = cuts.some((c, i) => Math.abs(c - split.found[i]) > 0.05);
-  const reset = btn('Undo my changes', () => { detail.cuts = [...split.found]; saveCuts(detail); redrawSplit(); }, 'ghost', { disabled: !changed || undefined });
+  const changed = cuts.length !== split.found.length || cuts.some((c, i) => Math.abs(c - split.found[i]) > 0.05)
+    || (detail.free && detail.titles.some((t, i) => t !== split.found_titles[i]));
+  const reset = btn('Undo my changes', () => {
+    Object.assign(detail, { cuts: [...split.found], marks: [...split.found_marks], titles: detail.free ? [...split.found_titles] : null });
+    saveCuts(detail);
+    redrawSplit();
+  }, 'ghost', { disabled: !changed || undefined });
+  const splitButton = detail.free ? btn('Split here', () => splitHere(), 'ghost', { title: "Starts a new track where it's playing, or where you last clicked the waveform" }) : null;
   const file = btn('File the album', event => fileSplit(album, event.currentTarget), 'primary');
   return el('section', { class: 'detail-section split' }, head,
-    el('p', { class: 'small muted yt-intro' }, `${how} Play each join to hear that it's clean, and move any that are off with the buttons, the arrow keys or by dragging its marker. Nothing is cut until you press File the album.`),
+    el('p', { class: 'small muted yt-intro' }, `${how} Play each join to hear that it's clean, and move any that are off with the buttons, the arrow keys or by dragging its marker.${detail.free ? ' Join two tracks that should be one, or press Split here as a new track starts. Name each track.' : ''} Nothing is cut until you press File the album.`),
     ...split.warnings.map(text => el('div', { class: 'note split-warning' }, text)),
     unsure ? el('div', { class: 'note split-warning' }, `${plural(unsure, 'start')} had no gap nearby. Listen to ${unsure === 1 ? 'that one' : 'those'} first.`) : null,
     wave,
     el('div', { class: 'row-between small muted tabular split-scale' }, el('span', {}, '0:00'), el('span', {}, clock(Math.round(split.duration)))),
     el('div', { class: 'yt-bar' }, el('span', { class: 'small muted tabular yt-count' }, `${plural(tracks.length, 'track')} · ${split.job.source.title}`),
-      el('div', { class: 'row actions' }, reset, file)),
+      el('div', { class: 'row actions' }, splitButton, reset, file)),
     el('ol', { class: 'split-tracks' }, ...rows, end));
 }
 
 async function fileSplit(album, button) {
   const opened = detail;
   clearTimeout(saveTimer);
-  const done = await busy(button, () => api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts, file: true }) }));
+  const done = await busy(button, () => api(`/api/queue/${opened.fillJob}/split`, { method: 'POST', body: JSON.stringify({ cuts: opened.cuts, titles: opened.titles, file: true }) }));
   if (done === undefined) return;
   stopPlaying();
-  toast(`${album.title} is being cut into ${plural(opened.split.tracks.length, 'track')} and filed.`);
+  toast(`${album.title} is being cut into ${plural(opened.cuts.length - 1, 'track')} and filed.`);
   $('detail').close();
   await refreshJobs();
 }
@@ -897,7 +1058,7 @@ function jobCard(job) {
   if (job.state === 'failed') {
     const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
     if (job.kind === 'youtube') buttons.push(btn('Change links', () => openAlbum(album, false, 'youtube')));
-    else if (job.kind === 'youtube_album') buttons.push(btn('Change the video', () => openAlbum(album, false, 'youtube')));
+    else if (job.kind === 'youtube_album' && !job.source.free) buttons.push(btn('Change the video', () => openAlbum(album, false, 'youtube')));
     else if (job.kind !== 'video' && job.kind !== 'single') buttons.push(btn('Pick another', () => openAlbum(album)));
     buttons.push(btn('Retry', event => act(`/api/queue/${job.id}/retry`, 'POST', event.currentTarget)));
   }
@@ -1056,6 +1217,7 @@ function show(next, { push = true } = {}) {
     $('viewSub').textContent = VIEWS[shown][1];
   }
   $('viewActions').replaceChildren();
+  if (shown === 'find') $('viewActions').append(btn('Album from YouTube', () => openFree(), 'ghost', { title: "Split one YouTube video of a whole album that MusicBrainz doesn't have" }));
   const tab = next === 'artist' ? cameFrom : next;
   document.querySelectorAll('.nav-link[data-view], .bottom-nav [data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === tab));
   const title = next === 'artist' ? (page && page.artist ? page.artist.name : 'Artist') : VIEWS[next][0];

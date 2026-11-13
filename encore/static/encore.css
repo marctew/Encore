@@ -178,6 +178,17 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .split-steps { gap: 4px; flex-wrap: wrap; }
 .split-step { min-width: 48px; font-variant-numeric: tabular-nums; }
 .split-play.playing { color: rgb(var(--accent)); background: rgb(var(--accent) / 0.15); }
+.split-cursor { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed rgb(var(--text) / 0.5); pointer-events: none; }
+.split-name { min-width: 0; padding-top: 4px; padding-bottom: 4px; }
+.split-track:has(.split-name) .split-left { padding-top: 0; align-items: center; }
+
+/* An album MusicBrainz doesn't have, from one video */
+.free { display: grid; gap: 12px; }
+.free .detail-title { margin-bottom: 0; }
+.free .yt-intro { margin: 0; }
+.free-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px; gap: 12px; }
+.free .field + .field { margin-top: 0; }
+.free-tracks { width: 100%; resize: vertical; font: inherit; line-height: 22px; }
 .job-kind { margin-left: 8px; vertical-align: 1px; }
 
 /* ---------------------------------------------------------- the queue */
@@ -269,6 +280,8 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
   .split-track { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 4px; }
   .split-left { padding-top: 0; }
   .yt-mode { width: 100%; }
+  .free-grid { grid-template-columns: minmax(0, 1fr); }
+  .free .input { font-size: 16px; }
   .queue-panel { padding: 12px; }
 }
 @media (pointer: coarse) { .btn-sm { min-height: 40px; } }

@@ -23,7 +23,7 @@ Checked by `tools/check_api_encore.py` (against fakes) and `scripts/check_api.py
 
 ## Feeds: `GET /api/v1/feeds/<name>`
 
-Every item: `id`, `title` ("Artist – Album"), `subtitle`, `at`, `at_label`, `tone`, `image` (`/api/v1/images/cover/<album id>`, or `/api/v1/images/artist/<artist id>` for a music video), `url` (Encore's page), and `meta` below.
+Every item: `id`, `title` ("Artist – Album"), `subtitle`, `at`, `at_label`, `tone`, `image` (`/api/v1/images/cover/<album id>`, `/api/v1/images/artist/<artist id>` for a music video, or null for an album MusicBrainz doesn't have), `url` (Encore's page), and `meta` below.
 
 | Feed | Order | Parameters | Items |
 |---|---|---|---|

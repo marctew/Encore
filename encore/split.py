@@ -134,6 +134,81 @@ def plan(levels, track_seconds, chapters):
             "warnings": warnings, "gaps": [cut_in(g) for g in gaps][:3000], "peaks": peaks(levels)}
 
 
+FREE_SHORTEST = 30          # seconds: a track found from gaps alone is at least this long
+CLEAR_GAP = 1.0             # seconds: with no track count, a gap this long is taken as between tracks
+
+
+def plan_free(levels, count, chapters):
+    """For an album MusicBrainz doesn't have: no track lengths, so the video's chapters if there's one
+    per track, and otherwise the longest gaps, as many as there are tracks. With no count (no track
+    list), every clear gap is a new track. Returns the same as plan, with chapter titles in "names"."""
+    duration = round(len(levels) * STEP, 2)
+    usable = [c for c in chapters if 0 <= c["start"] < duration]
+    # With no track list, only chapters that all have names are trusted: YouTube makes up odd ones.
+    trusted = len(usable) == count if count else len(usable) >= 3 and all(c["title"] for c in usable)
+    if len(usable) >= 2 and trusted:
+        found = plan(levels, [0] * len(usable), usable)
+        found["names"] = [c["title"] for c in usable]
+        return found
+    gaps = find_gaps(levels, floor_for(levels))
+    warnings = []
+    if usable and count:
+        warnings.append(f"The video has {len(usable)} chapter{'' if len(usable) == 1 else 's'} and the track list "
+                        f"{count} tracks, so Encore went by the gaps instead.")
+    shortest = FREE_SHORTEST if not count else max(SHORTEST, min(FREE_SHORTEST, duration / count / 3))
+    if count:
+        pool = gaps
+    else:
+        pool = [g for g in gaps if g[1] - g[0] >= CLEAR_GAP] or [g for g in gaps if g[1] - g[0] >= CLEAR_GAP / 2]
+    chosen = []
+    for gap in sorted(pool, key=lambda g: g[0] - g[1]):          # longest first
+        at = cut_in(gap)
+        if at < shortest or at > duration - shortest or any(abs(at - c) < shortest for c in chosen):
+            continue
+        chosen.append(at)
+        if count and len(chosen) == count - 1:
+            break
+    guessed = set()
+    while count and len(chosen) < count - 1:                     # not enough gaps: halve the longest stretch
+        edges = [0.0, *sorted(chosen), duration]
+        start, end = max(zip(edges, edges[1:]), key=lambda pair: pair[1] - pair[0])
+        middle = round((start + end) / 2, 2)
+        chosen.append(middle)
+        guessed.add(middle)
+    if guessed:
+        warnings.append(f"Only {count - 1 - len(guessed)} clear gap{'' if count - 1 - len(guessed) == 1 else 's'} for "
+                        f"{count} tracks, so {len(guessed)} start{' was' if len(guessed) == 1 else 's were'} put halfway. "
+                        "Find those by ear.")
+    if not count:
+        warnings.append(f"Encore found {len(chosen) + 1} tracks from the gaps. Join or split any it got wrong, and name them.")
+    cuts = [0.0, *sorted(chosen), duration]
+    marks = [{"from": "start", "gap": False, "moved": 0}] + [{"from": "gap", "gap": c not in guessed, "moved": 0} for c in cuts[1:-1]]
+    return {"duration": duration, "cuts": cuts, "marks": marks, "source": "gaps", "warnings": warnings, "names": [],
+            "gaps": [cut_in(g) for g in gaps][:3000], "peaks": peaks(levels)}
+
+
+def aligned_marks(plan_data, cuts):
+    """The marks for the cuts as they are now: Encore's own where a cut is still where it found it, and
+    "you" where a person moved or added it, so the page can say which is which after a reload."""
+    found, marks = plan_data.get("found") or [], plan_data.get("marks") or []
+    aligned = []
+    for place, at in enumerate(cuts[:-1]):
+        same = next((i for i, f in enumerate(found[:-1]) if abs(f - at) < 0.05 and i < len(marks)), None)
+        aligned.append(marks[same] if same is not None else {"from": "you", "gap": False, "moved": 0})
+    return aligned
+
+
+def checked_titles(titles, count):
+    """Track names sent back from the page for an album without MusicBrainz. Blank ones become "Track N"."""
+    if not isinstance(titles, list) or len(titles) != count:
+        raise SplitError("Each track needs a name, even a blank one")
+    named = []
+    for place, title in enumerate(titles):
+        text = " ".join(str(title or "").split())[:200]
+        named.append(text or f"Track {place + 1}")
+    return named
+
+
 def peaks(levels):
     """The waveform: the loudest reading in each of BARS slices, as 0-100."""
     size = max(1, math.ceil(len(levels) / BARS))
@@ -145,8 +220,9 @@ def peaks(levels):
 
 
 def checked_cuts(cuts, count, duration):
-    """Boundaries sent back from the page: count + 1 numbers, in order, inside the audio, no track under SHORTEST."""
-    if not isinstance(cuts, list) or len(cuts) != count + 1:
+    """Boundaries sent back from the page: count + 1 numbers (any count from 1 to 99 when count is None),
+    in order, inside the audio, no track under SHORTEST."""
+    if not isinstance(cuts, list) or (count is not None and len(cuts) != count + 1) or not 2 <= len(cuts) <= 100:
         raise SplitError("The track starts don't match the track list")
     try:
         cuts = [round(float(c), 2) for c in cuts]

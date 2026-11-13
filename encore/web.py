@@ -842,6 +842,74 @@ def add_youtube_album_job():
     return jsonify(public(s.queue.add_youtube_album(details, edition, s.youtube.lookup(video_id, fresh=True))))
 
 
+# ---------------------------------------------------------------- an album MusicBrainz doesn't have, from one video
+
+ALBUM_NOISE = re.compile(r"[(\[]?\b(full album|complete album|full lp|album completo|whole album|full ep)\b[)\]]?", re.I)
+
+
+def album_guess(video):
+    """What a person would probably type for a whole-album upload: the album from the title (a quoted
+    name, or "Artist - Album"), the artist from the title or else the channel, the year the description
+    gives (an old album uploaded later), and the track names from its track list or chapters."""
+    title = video["title"]
+    quoted = re.search(r"[\"“”']([^\"“”']{2,80})[\"“”']", title)
+    parts = [p.strip() for p in re.split(r"\s+[-–—|]\s+|~|\|", ALBUM_NOISE.sub(" ", title)) if p.strip(" *~-")]
+    channel = re.sub(r"\s*-\s*Topic$|VEVO$|\s+Official$", "", video.get("channel") or "", flags=re.I).strip()
+    artist, album = channel, ""
+    if quoted:
+        album = quoted.group(1).strip()
+    elif len(parts) >= 2:
+        artist, album = parts[0], parts[1]
+    elif parts:
+        album = parts[0]
+    album = " ".join(ALBUM_NOISE.sub(" ", album).strip(" -–|~*\"").split())
+    named = [c["title"] for c in video.get("chapters") or [] if c["title"]]
+    tracks = video.get("tracklist") or (named if len(named) >= 2 and len(named) == len(video.get("chapters") or []) else [])
+    return {"artist": artist, "title": album, "year": video.get("recorded") or "", "tracks": tracks}
+
+
+@bp.post("/api/youtube/album")
+def youtube_free_lookup():
+    """Looks up one video of an album MusicBrainz doesn't have, with Encore's guess at its details."""
+    s = svc()
+    text = str(body().get("url", "")).strip()
+    video_id = youtube_id(text)
+    if not video_id:
+        raise Refusal(400, "Paste a YouTube video link")
+    video = s.youtube.lookup(video_id, fresh=True)
+    if video["live"]:
+        raise Refusal(409, "That's a live stream, not an upload")
+    job = next((j for j in s.queue.jobs if j["album_id"] == f"yt-album-{video_id}" and j["state"] in ACTIVE), None)
+    return jsonify(video=video, guess=album_guess(video), job=public(job) if job else None)
+
+
+@bp.post("/api/queue/youtube/free")
+def add_youtube_free_job():
+    data, s = body(), svc()
+    video_id = youtube_id(str(data.get("video", "")))
+    cached = s.store.youtube_video(video_id) if video_id else None
+    if not cached:
+        raise Refusal(409, "Look the video up first")
+    artist, title = (" ".join(str(data.get(k, "")).split())[:200] for k in ("artist", "title"))
+    year = str(data.get("year", "")).strip()
+    if not artist or not title:
+        raise Refusal(400, "Type the artist and the album's name")
+    if year and not re.fullmatch(r"(19|20)\d\d", year):
+        raise Refusal(400, "The year should be four digits, like 2001, or blank")
+    names = data.get("tracks") or []
+    if not isinstance(names, list) or len(names) > 99:
+        raise Refusal(400, "Up to 99 tracks, one name each")
+    names = [" ".join(str(n).split())[:200] for n in names if str(n).strip()]
+    if len(names) == 1:
+        raise Refusal(400, "One track is nothing to split. List them all, or leave the list empty")
+    if not folders_ready():
+        raise Refusal(409, "Set your folders in Settings first")
+    with s.queue.lock:
+        if any(j["album_id"] == f"yt-album-{video_id}" and j["state"] in ACTIVE for j in s.queue.jobs):
+            raise Refusal(409, "Already queued")
+    return jsonify(public(s.queue.add_youtube_free(cached["video"], artist, title, year, names)))
+
+
 def review_job(job_id):
     """A whole-album job with its plan saved: waiting to be checked, or failed after it was."""
     job = find_job(job_id)
@@ -855,11 +923,18 @@ def review_job(job_id):
 def split_view(job_id):
     job, plan, _ = review_job(job_id)
     chapters = job["source"].get("chapters") or []
-    named = plan.get("source") == "chapters"
-    tracks = [{**t, "chapter": chapters[i]["title"] if named and i < len(chapters) else ""}
-              for i, t in enumerate(job["source"]["tracks"])]
-    return jsonify(job=public(job), tracks=tracks, discs=len({t["disc"] for t in tracks}),
-                   **{k: plan.get(k) for k in ("duration", "cuts", "found", "marks", "source", "warnings", "gaps", "peaks")})
+    free = bool(job["source"].get("free"))
+    if free:
+        tracks = [{"key": f"1-{n + 1}", "disc": 1, "number": n + 1, "title": t, "seconds": 0, "chapter": ""}
+                  for n, t in enumerate(plan["titles"])]
+    else:
+        named = plan.get("source") == "chapters"
+        tracks = [{**t, "chapter": chapters[i]["title"] if named and i < len(chapters) else ""}
+                  for i, t in enumerate(job["source"]["tracks"])]
+    return jsonify(job=public(job), tracks=tracks, discs=len({t["disc"] for t in tracks}), free=free,
+                   marks=split.aligned_marks(plan, plan["cuts"]), found_marks=plan.get("marks"),
+                   titles=plan.get("titles"), found_titles=plan.get("found_titles"),
+                   **{k: plan.get(k) for k in ("duration", "cuts", "found", "source", "warnings", "gaps", "peaks")})
 
 
 @bp.post("/api/queue/<job_id>/split")
@@ -867,8 +942,11 @@ def split_save(job_id):
     """Saves where each track starts (so a restart keeps them), and with file: true queues the album to be cut and filed."""
     queue, data = svc().queue, body()
     job, plan, path = review_job(job_id)
+    free = job["source"].get("free")
     try:
-        cuts = split.checked_cuts(data.get("cuts"), len(job["source"]["tracks"]), plan["duration"])
+        cuts = split.checked_cuts(data.get("cuts"), None if free else len(job["source"]["tracks"]), plan["duration"])
+        if free:
+            plan["titles"] = split.checked_titles(data.get("titles"), len(cuts) - 1)
     except split.SplitError as error:
         raise Refusal(400, str(error)) from None
     plan["cuts"] = cuts
@@ -882,7 +960,7 @@ def split_save(job_id):
             job["confirmed"] = True
             queue.update(job, state="queued", message="", percent=0)
         queue.wake.set()
-    return jsonify(job=public(job), cuts=cuts)
+    return jsonify(job=public(job), cuts=cuts, titles=plan.get("titles"))
 
 
 @bp.get("/api/queue/<job_id>/split/audio")

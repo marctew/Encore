@@ -83,18 +83,80 @@ def summary(entry):
             "thumb": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
             "live": entry.get("live_status") in ("is_live", "is_upcoming"),
             "year": str(entry.get("release_year") or entry.get("upload_date") or "")[:4],
-            "chapters": chapters(entry)}
+            "chapters": chapters(entry), "tracklist": description_tracks(entry.get("description") or ""),
+            "recorded": described_year(entry.get("description") or "")}
+
+
+TRACK_HEAD = re.compile(r"\btrack\s*(list|listing)?s?\b|\bsetlist\b|\bsongs\b", re.I)
+NUMBERED = re.compile(r"^\s*(\d{1,2})\s*[.)\-–:]\s+\S")
+LINK = re.compile(r"https?://|www\.|@\w|#\w", re.I)
+
+
+def clean_track(line):
+    """A track's name from a line of a track list: no number in front, no stars, length or timestamp after."""
+    line = STAMP.sub(" ", line)
+    line = re.sub(r"^\s*\d{1,2}\s*[.)\-–:]\s+", "", line)
+    line = re.sub(r"[\s(\[]*[)\]]?\s*$", "", line)
+    line = re.sub(r"[\s*~•·|\-–—:]+$", "", line)
+    line = re.sub(r"^[\s*~•·|\-–—:]+", "", line)
+    return " ".join(line.split())
+
+
+def description_tracks(text):
+    """Track names listed in the description without timestamps: the lines after a "Track list"
+    heading, or a run of numbered lines (1. 2. 3.). [] when there's no list of at least three."""
+    lines = text.splitlines()
+
+    def run_from(start):
+        found = []
+        for line in lines[start:]:
+            if not line.strip():
+                if found:
+                    break
+                continue
+            name = clean_track(line)
+            if LINK.search(line) or not name or len(name) > 100 or TRACK_HEAD.fullmatch(name.strip(" :~")):
+                break
+            found.append(name)
+        return found
+
+    for place, line in enumerate(lines):
+        head = line.strip(" :~*-–—=").strip()
+        if head and TRACK_HEAD.search(head) and len(head) <= 30:
+            found = run_from(place + 1)
+            if len(found) >= 3:
+                return found
+    numbered, expected = [], 1
+    for line in lines:
+        number = NUMBERED.match(line)
+        if number and int(number.group(1)) == expected and not LINK.search(line):
+            numbered.append(clean_track(line))
+            expected += 1
+        elif numbered and line.strip():
+            break
+    return numbered if len(numbered) >= 3 else []
+
+
+def described_year(text):
+    """The first year the description mentions ("Recorded in Feb 2000"), for an old album uploaded years later."""
+    found = re.search(r"\b(19[5-9]\d|20[0-4]\d)\b", text)
+    return found.group(1) if found else ""
 
 
 def chapters(entry):
     """[{start, title}] in order: YouTube's own chapters, or else the timestamps in the description,
     which is where uploads of a whole album usually list their tracks."""
     seconds = entry.get("duration") or 0
-    found = [{"start": float(c.get("start_time") or 0), "title": str(c.get("title") or "").strip()}
+    found = [{"start": float(c.get("start_time") or 0), "title": untitled(str(c.get("title") or "").strip())}
              for c in entry.get("chapters") or [] if isinstance(c, dict)]
     if not found:
         found = description_chapters(entry.get("description") or "", seconds)
     return [c for c in found if not seconds or c["start"] < seconds]
+
+
+def untitled(title):
+    """YouTube names a chapter it made up "<Untitled Chapter 1>"; that's no name at all."""
+    return "" if re.fullmatch(r"<?untitled chapter \d+>?", title, re.I) else title
 
 
 def description_chapters(text, seconds=0):
