@@ -195,6 +195,7 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .single-search .input { flex: 1; min-width: 0; }
 .single-picked { display: grid; gap: 12px; }
 .single-field { max-width: 480px; }
+.single-ticks { display: grid; gap: 10px; }
 
 /* Library tiles */
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }

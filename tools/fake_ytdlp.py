@@ -18,7 +18,10 @@ VIDEOS = json.loads((HOME / "videos.json").read_text())
 
 def entry(video_id):
     video = VIDEOS[video_id]
-    return {"id": video_id, "title": video["title"], "channel": video["channel"], "duration": video["duration"]}
+    found = {"id": video_id, "title": video["title"], "channel": video["channel"], "duration": video["duration"]}
+    if "-J" in sys.argv and "--flat-playlist" not in sys.argv and video.get("upload_date"):
+        found["upload_date"] = video["upload_date"]      # a flat search doesn't give the date; a lookup does
+    return found
 
 
 def main(args):

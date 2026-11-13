@@ -417,10 +417,13 @@ def add_youtube_video():
     song = " ".join(str(data.get("song", "")).split())[:120]
     if not filing.safe(song):
         raise Refusal(400, "Give the song a name")
+    want_video, want_audio = bool(data.get("video_file", True)), bool(data.get("audio"))
+    if not (want_video or want_audio):
+        raise Refusal(400, "Choose the video, the song or both")
     with s.queue.lock:
         if any(j["album_id"] == f"video-yt-{video_id}" and j["state"] in ACTIVE for j in s.queue.jobs):
             raise Refusal(409, "Already queued")
-    return jsonify(public(s.queue.add_youtube_video(artist, cached["video"], song)))
+    return jsonify(public(s.queue.add_youtube_video(artist, cached["video"], song, want_video, want_audio)))
 
 
 # ---------------------------------------------------------------- library and wanted

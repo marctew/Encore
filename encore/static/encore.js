@@ -543,7 +543,7 @@ function jobCard(job) {
   if (job.state === 'failed') {
     const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
     if (job.kind === 'youtube') buttons.push(btn('Change links', () => openAlbum(album, false, 'youtube')));
-    else if (job.kind !== 'video') buttons.push(btn('Pick another', () => openAlbum(album)));
+    else if (job.kind !== 'video' && job.kind !== 'single') buttons.push(btn('Pick another', () => openAlbum(album)));
     buttons.push(btn('Retry', event => act(`/api/queue/${job.id}/retry`, 'POST', event.currentTarget)));
   }
   if (job.state === 'failed' && (job.can_import || job.message.startsWith('Not all FLAC'))) {
@@ -888,7 +888,7 @@ function redrawSingle() {
 function buildSingle() {
   const head = el('div', { class: 'single-head' },
     el('h3', { class: 'h3' }, 'From YouTube'),
-    el('p', { class: 'small muted' }, "For a song that isn't listed yet, like a new single. Paste a link or type the song's name. The video is filed with the artist's music videos."));
+    el('p', { class: 'small muted' }, "For a song that isn't listed yet, like a new single. Paste a link or type the song's name, then file its video, the song, or both."));
   const parts = [head];
   if (single.picked) parts.push(pickedSingle(single.picked));
   else {
@@ -915,18 +915,38 @@ function buildSingle() {
 function pickedSingle(video) {
   const job = activeJob(`video-yt-${video.id}`);
   const name = el('input', { class: 'input', id: 'singleSong', value: single.song, maxlength: 120, autocomplete: 'off' });
-  const where = () => `Filed as ${page.artist.name}/${single.song.trim() || 'Song'}-video.mp4, and Plex shows it by that name.`;
-  const hint = el('div', { class: 'hint' }, where());
-  name.oninput = () => { single.song = name.value; hint.textContent = where(); if (!job) get.disabled = !name.value.trim(); };
-  name.onkeydown = event => { if (event.key === 'Enter' && name.value.trim()) { event.preventDefault(); getSingle(get); } };
+  const song = () => single.song.trim() || 'Song';
+  const year = video.year || new Date().getFullYear();
+  const hint = el('div', { class: 'hint' });
+  const videoHint = el('span', { class: 'hint', style: 'display:block' });
+  const audioHint = el('span', { class: 'hint', style: 'display:block' });
+  const ready = () => single.song.trim() && (single.wantVideo || single.wantAudio);
+  const sync = () => {
+    hint.textContent = "It's what Plex shows, so check it.";
+    videoHint.textContent = video.audio_only ? 'This upload is the song over a still picture, so it makes a poor video.'
+      : `Filed as ${page.artist.name}/${song()}-video.mp4, in the artist's Extras.`;
+    audioHint.textContent = `Filed as ${page.artist.name}/${song()} (${year}), one track as YouTube has it (AAC). Not checked against MusicBrainz.`;
+    if (!job) get.disabled = !ready();
+  };
+  const tick = (key, label, help) => {
+    const box = el('input', { type: 'checkbox', checked: single[key] || undefined });
+    box.onchange = () => { single[key] = box.checked; sync(); };
+    return el('label', { class: 'check' }, box, el('span', {}, label, help));
+  };
+  name.oninput = () => { single.song = name.value; sync(); };
+  name.onkeydown = event => { if (event.key === 'Enter' && ready()) { event.preventDefault(); getSingle(get); } };
   const get = job ? btn(job.state === 'done' ? 'Done' : 'In the queue', null, 'primary', { disabled: true })
-    : btn('Get video', event => getSingle(event.currentTarget), 'primary', { disabled: !single.song.trim() || undefined });
+    : btn('Get', event => getSingle(event.currentTarget), 'primary');
   const back = btn('Pick another', () => { single.picked = null; redrawSingle(); });
+  sync();
   return el('div', { class: 'single-picked' },
     videoCard(video, true),
     el('div', { class: 'single-field' },
       el('label', { class: 'label', for: 'singleSong' }, 'Song'),
       name, hint),
+    el('div', { class: 'single-ticks' },
+      tick('wantVideo', 'The music video', videoHint),
+      tick('wantAudio', 'The song, as a single', audioHint)),
     el('div', { class: 'row actions' }, get, back));
 }
 
@@ -949,7 +969,7 @@ async function findSingle() {
 }
 
 function pickSingle(video, redraw = true) {
-  Object.assign(single, { picked: video, song: video.song || '' });
+  Object.assign(single, { picked: video, song: video.song || '', wantVideo: !video.audio_only, wantAudio: true });
   if (redraw) {
     redrawSingle();
     const box = $('singleSong');
@@ -959,7 +979,8 @@ function pickSingle(video, redraw = true) {
 
 async function getSingle(button) {
   const video = single.picked, song = single.song.trim();
-  const added = await busy(button, () => api('/api/videos/youtube', { method: 'POST', body: JSON.stringify({ artist_id: page.id, video: video.id, song }) }));
+  const added = await busy(button, () => api('/api/videos/youtube', { method: 'POST',
+    body: JSON.stringify({ artist_id: page.id, video: video.id, song, video_file: single.wantVideo, audio: single.wantAudio }) }));
   if (added === undefined) return;
   toast(`${song} is in the queue.`);
   Object.assign(single, { q: '', song: '', picked: null, results: null });

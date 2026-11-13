@@ -38,7 +38,8 @@ VIDEOS = {
     "brokenvide0": {"title": "Test Band - Something", "channel": "Test Band", "duration": 9, "fail": "HTTP Error 403: Forbidden"},
     "aaaaaaaaaa5": {"title": "Test Band - Something (Official Video)", "channel": "Test Band", "duration": 9},
     "slowvideo00": {"title": "Test Band - Oh! Darling", "channel": "Test Band", "duration": 10, "slow": True},
-    "newsingle01": {"title": "Test Band - Brand New Day (Official Video) 4K", "channel": "Test Band", "duration": 25},
+    "newsingle01": {"title": "Test Band - Brand New Day (Official Video) 4K", "channel": "Test Band", "duration": 25,
+                    "upload_date": "20261107"},
 }
 ARTIST_ID = "33333333-3333-3333-3333-333333333333"
 
@@ -293,6 +294,40 @@ def main():
     find("https://youtu.be/aaaaaaaaaa1")
     job = wait(s.queue, queue_single("aaaaaaaaaa1", "Come Together").get_json()["id"])
     expect("a clip too short to be a video fails", job["state"] == "failed" and "isn't a playable video" in job["message"], job["message"])
+
+    # The same song filed as a single too: one tagged track in Artist/Song (Year), with the video
+    s.queue.jobs.clear()
+    subprocess.run(["rm", "-rf", str(music / "Test Band")], check=True)
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    send = lambda video, song, **wants: client.post("/api/videos/youtube", headers=HEAD,
+                                                    json={"artist_id": ARTIST_ID, "video": video, "song": song, **wants})
+    response = send("newsingle01", "Brand New Day", video_file=False, audio=False)
+    expect("it needs the video, the song or both", response.status_code == 400, response.get_data(as_text=True))
+    response = send("newsingle01", "Brand New Day", audio=True)
+    expect("a single is queued", response.status_code == 200 and response.get_json()["kind"] == "single", response.get_data(as_text=True))
+    job = wait(s.queue, response.get_json()["id"])
+    expect("the single is filed", job["state"] == "done" and job["where"] == "library" and job["folder"] == "Test Band/Brand New Day (2026)",
+           (job["message"], job.get("folder")))
+    folder = music / "Test Band" / "Brand New Day (2026)"
+    names = sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+    expect("one track and a cover", names == ["01 - Brand New Day.m4a", "cover.jpg"], names)
+    tags = MP4(folder / "01 - Brand New Day.m4a") if names else {}
+    expect("tagged as its own single", tags.get("\xa9alb") == ["Brand New Day"] and tags.get("\xa9nam") == ["Brand New Day"]
+           and tags.get("aART") == ["Test Band"] and tags.get("trkn") == [(1, 0)] and tags.get("\xa9day") == ["2026"], dict(tags or {}))
+    expect("the thumbnail is its cover", bool(tags.get("covr")))
+    expect("the year is the upload's, from a fresh lookup", job["year"] == "2026", job.get("year"))
+    expect("its video filed beside it", (music / "Test Band" / "Brand New Day-video.mp4").exists() and "Video filed." in job["message"], job["message"])
+    expect("quality says YouTube AAC", job["quality"].startswith("YouTube AAC"), job["quality"])
+    expect("the single's download is cleared", downloads() == ["newsingle01"] and not any(downloads_dir.rglob("*.mp4")))
+    job = wait(s.queue, send("newsingle01", "Brand New Day", video_file=False, audio=True).get_json()["id"])
+    expect("a single you have goes to import to compare", job["state"] == "done" and job["where"] == "import"
+           and "You already have Brand New Day (2026)" in job["message"], job["message"])
+    expect("song only leaves the video alone", "Video" not in job["message"], job["message"])
+    find("https://youtu.be/aaaaaaaaaa2")
+    job = wait(s.queue, send("aaaaaaaaaa2", "Something", video_file=False, audio=True).get_json()["id"])
+    year = time.strftime("%Y")
+    expect("a Topic upload makes a song with no video", job["state"] == "done" and job["folder"] == f"Test Band/Something ({year})"
+           and not (music / "Test Band" / "Something-video.mp4").exists(), (job["message"], job.get("folder")))
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return 0 if all(results) else 1

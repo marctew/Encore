@@ -138,7 +138,7 @@ def job_text(job):
 
 
 def image_for(job):
-    if job.get("kind") == "video":
+    if job.get("kind") in ("video", "single"):
         return f"/api/v1/images/artist/{job['artist_id']}" if job.get("artist_id") else None
     return f"/api/v1/images/cover/{job['album_id']}"
 
@@ -255,7 +255,7 @@ def feed_failed(limit):
 def arrival_item(row):
     data = json.loads(row["data"])
     where = data.get("where")
-    subtitle = ("Music video" if data.get("kind") == "video" else
+    subtitle = ("Music video" if data.get("kind") == "video" else "Single" if data.get("kind") == "single" and where != "import" else
                 "In MusicImport" if where == "import" else "In your library")
     if data.get("quality"):
         subtitle += f" · {data['quality']}"
