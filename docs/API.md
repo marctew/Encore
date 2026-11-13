@@ -14,10 +14,10 @@ Checked by `tools/check_api_encore.py` (against fakes) and `scripts/check_api.py
 
 | Field | Encore's meaning |
 |---|---|
-| `state` | `error` when the folders aren't set; `busy` while anything is downloading, being checked, filed or scanned; `warning` when a download has failed (and is still in the queue) or SABnzbd isn't set up; otherwise `ok` |
-| `headline` | "2 albums downloading", "1 download failed", "Nothing downloading" |
+| `state` | `error` when the folders aren't set; `busy` while anything is downloading, being checked, filed or scanned; `warning` when a download has failed (and is still in the queue), an album from one YouTube video is waiting to be checked, or SABnzbd isn't set up; otherwise `ok` |
+| `headline` | "2 albums downloading", "1 download failed", "1 album to check", "Nothing downloading" |
 | `detail` | The album being worked on ("Now: Fleetwood Mac – Rumours, Downloading 64%"), the failure's reason, or what's next |
-| `counts` | `downloading`, `queued`, `failed`, `arrived_today` (since local midnight), `wanted` |
+| `counts` | `downloading`, `queued`, `failed`, `to_check` (albums from one YouTube video waiting for their tracks to be checked), `arrived_today` (since local midnight), `wanted` |
 
 `refresh_s` is 30.
 
@@ -27,12 +27,12 @@ Every item: `id`, `title` ("Artist – Album"), `subtitle`, `at`, `at_label`, `t
 
 | Feed | Order | Parameters | Items |
 |---|---|---|---|
-| `downloads` | The queue's: running first, then waiting in queue order. Answered whole up to `limit`; ignores `since` and `cursor` | `limit` | `subtitle` is the job's progress ("Downloading 64%", "SABnzbd: Extracting", "YouTube track 4 of 12 · 30%", "Filing: copying 3 of 12 files · 40%", "Waiting"). `tone` `info` running, `muted` waiting. `at` is when it was queued |
+| `downloads` | The queue's: running first, then those waiting to be checked, then waiting in queue order. Answered whole up to `limit`; ignores `since` and `cursor` | `limit` | `subtitle` is the job's progress ("Downloading 64%", "SABnzbd: Extracting", "YouTube track 4 of 12 · 30%", "Filing: copying 3 of 12 files · 40%", "Waiting"). `tone` `info` running, `warning` waiting to be checked, `muted` waiting. `at` is when it was queued |
 | `arrivals` | Newest first, by when it was filed | `limit`, `since`, `cursor` | Everything Encore has filed, kept after **Clear finished**. `subtitle` "In your library · 24/96", "In MusicImport", "Music video". `tone` `success`, or `warning` for MusicImport |
 | `failed` | Newest first. Answered whole up to `limit` | `limit` | Failed jobs still in the queue. `subtitle` is the reason. `tone` `danger` |
 | `wanted` | Newest first, by when it was added | `limit`, `since`, `cursor` | The Wanted list. `subtitle` "1977 · Album". `tone` `accent` |
 
-`meta` on job items (`downloads`, `failed`): `job_id`, `album_id`, `artist`, `album`, `kind` (`album`, `youtube` or `video`), `state` (`queued`, `downloading`, `verifying`, `filing`, `scanning`, `failed`), `percent`, `quality`.
+`meta` on job items (`downloads`, `failed`): `job_id`, `album_id`, `artist`, `album`, `kind` (`album`, `youtube`, `youtube_album`, `video` or `single`), `state` (`queued`, `downloading`, `verifying`, `filing`, `scanning`, `review`, `failed`), `percent`, `quality`.
 On `arrivals`: `job_id`, `album_id`, `artist`, `album`, `kind`, `where` (`library` or `import`), `folder`, `quality`, `message`.
 On `wanted`: `album_id`, `artist_id`, `artist`, `album`, `year`.
 

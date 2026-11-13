@@ -340,9 +340,10 @@ def youtube_song(artist, video):
     return "" if not song or words(song) == words(artist) else song
 
 
-def score_youtube(track, artist, video):
+def score_youtube(track, artist, video, whole=False):
     """Ranks a video for one track: the right length, the artist's own channel, the track's title,
-    and none of the words that mean it's some other version."""
+    and none of the words that mean it's some other version. With whole, the "track" is the whole
+    album in one video, so saying "full album" is a good sign rather than a bad one."""
     title, channel = words(video["title"]), words(video.get("channel"))
     named = words(artist)
     fit = youtube_fit(track.get("seconds"), video["seconds"])
@@ -369,7 +370,11 @@ def score_youtube(track, artist, video):
         notes.append("Title doesn't match")
     wanted = " ".join(words(track["title"]))
     said = " ".join(title)
+    if whole and " full album " in f" {said} ":
+        points += 10
     for word in YOUTUBE_WRONG:
+        if whole and word == "full album":
+            continue
         if f" {word} " in f" {said} " and f" {word} " not in f" {wanted} ":
             points -= 40
             notes.append(word.capitalize())

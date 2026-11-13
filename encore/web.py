@@ -18,7 +18,7 @@ from markupsafe import Markup
 from werkzeug.http import HTTP_STATUS_CODES
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import __version__, engine, filing, match
+from . import __version__, engine, filing, match, split
 from .auth import MIN_LENGTH, SESSION_DAYS, Auth
 from .config import DATA, PHOTOS, TRUSTED_PROXY
 from .engine import ACTIVE, Library, Owned, Queue, album_key, folders_ready, public, use_folders
@@ -690,7 +690,30 @@ def builder(s, details):
     edition = next((e for e in editions if e["id"] == draft["edition"]), editions[0])
     rows = [youtube_row(s, details, t, draft["links"].get(track_key(t))) for t in edition["tracks"]]
     return {"edition": edition["id"], "editions": [{"id": e["id"], "label": e["label_text"]} for e in editions],
-            "discs": len({t["disc"] for t in edition["tracks"]}), "tracks": rows}
+            "discs": len({t["disc"] for t in edition["tracks"]}), "tracks": rows,
+            "seconds": sum(t.get("seconds") or 0 for t in edition["tracks"]),
+            "whole": whole_row(s, details, edition, draft["links"].get(WHOLE))}
+
+
+# The whole-album video is kept in the same draft as the per-track links, under a key no track has.
+WHOLE = "whole"
+
+
+def whole_score(details, edition, video):
+    """A video of the whole album, scored like a track whose length is the album's and whose name is its title."""
+    album = {"title": details["title"], "seconds": sum(t.get("seconds") or 0 for t in edition["tracks"])}
+    return {**video, **match.score_youtube(album, details["artist"], video, whole=True), "audio_only": match.audio_only(video["channel"])}
+
+
+def whole_row(s, details, edition, video_id):
+    cached = s.store.youtube_video(video_id) if video_id else None
+    return whole_score(details, edition, cached["video"]) if cached else None
+
+
+def draft_edition(s, details):
+    editions = editions_of(details)
+    draft = s.store.youtube_draft(details["id"])
+    return draft, next((e for e in editions if e["id"] == draft["edition"]), editions[0])
 
 
 def youtube_track(s, album, key):
@@ -769,6 +792,109 @@ def youtube_find(album):
     return jsonify(results=rows[:5])
 
 
+@bp.post("/api/album/<album>/youtube/whole")
+def youtube_whole(album):
+    """Sets (or clears, when blank) the one video that has the whole album, and saves it with the draft.
+    Always looked up fresh, for its chapters: a search result doesn't carry them."""
+    s, data = svc(), body()
+    details = s.brainz.album(checked_id(album))
+    text = str(data.get("url", "")).strip()
+    video_id = youtube_id(text) if text else None
+    if text and not video_id:
+        raise Refusal(400, "That isn't a YouTube video link")
+    if video_id:
+        s.youtube.lookup(video_id, fresh=True)
+    draft, edition = draft_edition(s, details)
+    links = {**draft["links"], WHOLE: video_id} if video_id else {k: v for k, v in draft["links"].items() if k != WHOLE}
+    s.store.save_youtube_draft(album, edition["id"], links)
+    return jsonify(builder(s, details))
+
+
+@bp.post("/api/album/<album>/youtube/whole/find")
+def youtube_whole_find(album):
+    s = svc()
+    details = s.brainz.album(checked_id(album))
+    _, edition = draft_edition(s, details)
+    found = s.youtube.search(f"{details['artist']} {details['title']} full album")
+    for video in found:
+        s.store.save_youtube_video(video)
+    rows = sorted((whole_score(details, edition, v) for v in found if not v["live"]), key=lambda v: -v["score"])
+    return jsonify(results=rows[:5])
+
+
+@bp.post("/api/queue/youtube/whole")
+def add_youtube_album_job():
+    data, s = body(), svc()
+    album_id = checked_id(str(data.get("album_id", "")))
+    if not folders_ready():
+        raise Refusal(409, "Set your folders in Settings first")
+    with s.queue.lock:
+        if any(j["album_id"] == album_id and j["state"] in ACTIVE for j in s.queue.jobs):
+            raise Refusal(409, "Already queued")
+    details = s.brainz.album(album_id)
+    draft, edition = draft_edition(s, details)
+    video_id = draft["links"].get(WHOLE)
+    if not video_id:
+        raise Refusal(409, "Add the link to the album's video first")
+    if len(edition["tracks"]) < 2:
+        raise Refusal(409, "This edition has only one track, so there's nothing to split")
+    # Fresh, for its timestamps: a search since may have cached it without them.
+    return jsonify(public(s.queue.add_youtube_album(details, edition, s.youtube.lookup(video_id, fresh=True))))
+
+
+def review_job(job_id):
+    """A whole-album job with its plan saved: waiting to be checked, or failed after it was."""
+    job = find_job(job_id)
+    plan, path = svc().queue.split_plan(job)
+    if not plan or job["state"] not in ("review", "failed"):
+        raise Refusal(409, "That album isn't waiting to be checked")
+    return job, plan, path
+
+
+@bp.get("/api/queue/<job_id>/split")
+def split_view(job_id):
+    job, plan, _ = review_job(job_id)
+    chapters = job["source"].get("chapters") or []
+    named = plan.get("source") == "chapters"
+    tracks = [{**t, "chapter": chapters[i]["title"] if named and i < len(chapters) else ""}
+              for i, t in enumerate(job["source"]["tracks"])]
+    return jsonify(job=public(job), tracks=tracks, discs=len({t["disc"] for t in tracks}),
+                   **{k: plan.get(k) for k in ("duration", "cuts", "found", "marks", "source", "warnings", "gaps", "peaks")})
+
+
+@bp.post("/api/queue/<job_id>/split")
+def split_save(job_id):
+    """Saves where each track starts (so a restart keeps them), and with file: true queues the album to be cut and filed."""
+    queue, data = svc().queue, body()
+    job, plan, path = review_job(job_id)
+    try:
+        cuts = split.checked_cuts(data.get("cuts"), len(job["source"]["tracks"]), plan["duration"])
+    except split.SplitError as error:
+        raise Refusal(400, str(error)) from None
+    plan["cuts"] = cuts
+    split.save(path, plan)
+    if data.get("file"):
+        with queue.lock:
+            if job["state"] not in ("review", "failed"):
+                raise Refusal(409, "That album isn't waiting to be checked")
+            queue.jobs.remove(job)
+            queue.jobs.append(job)
+            job["confirmed"] = True
+            queue.update(job, state="queued", message="", percent=0)
+        queue.wake.set()
+    return jsonify(job=public(job), cuts=cuts)
+
+
+@bp.get("/api/queue/<job_id>/split/audio")
+def split_audio(job_id):
+    """The album's sound, for listening to each join. Ranged, so the page can jump about in it."""
+    job, _, path = review_job(job_id)
+    sound = path.parent / "album.m4a"
+    if not sound.exists():
+        raise Refusal(404)
+    return send_file(sound, mimetype="audio/mp4", conditional=True, max_age=0)
+
+
 def linked_tracks(s, details, partial):
     built = builder(s, details)
     linked = [r for r in built["tracks"] if r["video"]]
@@ -825,6 +951,8 @@ def retry(job_id, partial=False, keep_format=False):
         with queue.lock:
             job["source"] = {"type": "youtube", "edition": edition, "tracks": tracks}
             job["tracks"] = len(tracks)
+    elif job.get("kind") == "youtube_album":
+        pass                                  # the download stays: it goes back to the check without fetching it again
     elif keep_format:
         job["any_format"] = True
     elif not partial:

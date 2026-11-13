@@ -2,7 +2,11 @@
 """A stand-in for yt-dlp, for tools/check_youtube.py. Answers from FAKE_YT/videos.json and makes
 real (tiny) mp4 files with ffmpeg, so everything after the download runs for real.
 
-videos.json: {"<id>": {"title", "channel", "duration", "fail": "<stderr text>", "slow": true}}
+videos.json: {"<id>": {"title", "channel", "duration", "fail": "<stderr text>", "slow": true,
+               "description": "...", "chapters": [{"start_time", "end_time", "title"}],
+               "segments": [[<Hz, or 0 for silence>, <seconds>], ...]}}
+With "-f ba..." (just the sound) the download is an .m4a, made from segments when it has them: a
+whole album with real gaps between its tracks.
 Every download is logged to FAKE_YT/downloads.log, and a slow one writes its pid to FAKE_YT/slow.pid.
 """
 import json
@@ -19,9 +23,23 @@ VIDEOS = json.loads((HOME / "videos.json").read_text())
 def entry(video_id):
     video = VIDEOS[video_id]
     found = {"id": video_id, "title": video["title"], "channel": video["channel"], "duration": video["duration"]}
-    if "-J" in sys.argv and "--flat-playlist" not in sys.argv and video.get("upload_date"):
-        found["upload_date"] = video["upload_date"]      # a flat search doesn't give the date; a lookup does
+    if "-J" in sys.argv and "--flat-playlist" not in sys.argv:
+        for key in ("upload_date", "description", "chapters"):   # a flat search doesn't give these; a lookup does
+            if video.get(key):
+                found[key] = video[key]
     return found
+
+
+def sound(video, target):
+    """The sound alone: the segments one after another (a tone, or silence for 0 Hz), or one tone."""
+    parts = video.get("segments") or [[440, video["duration"]]]
+    line, labels = ["ffmpeg", "-v", "error", "-nostdin", "-y"], []
+    for place, (hz, seconds) in enumerate(parts):
+        source = f"sine=frequency={hz}:sample_rate=44100:duration={seconds}" if hz else f"anullsrc=r=44100:cl=mono:d={seconds}"
+        line += ["-f", "lavfi", "-i", source]
+        labels.append(f"[{place}]")
+    line += ["-filter_complex", f"{''.join(labels)}concat=n={len(parts)}:v=0:a=1", "-c:a", "aac", "-b:a", "128k", str(target)]
+    subprocess.run(line, check=True)
 
 
 def main(args):
@@ -56,6 +74,10 @@ def main(args):
     folder = Path(args[args.index("-o") + 1]).parent
     seconds = video["duration"]
     print("  50.0%", flush=True)
+    if "-f" in args and args[args.index("-f") + 1].startswith("ba"):
+        sound(video, folder / f"{video_id}.m4a")
+        print("100.0%", flush=True)
+        return 0
     subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", f"testsrc=size=160x90:rate=10:duration={seconds}",
                     "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k",
                     "-shortest", str(folder / f"{video_id}.mp4")], check=True)
