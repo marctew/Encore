@@ -32,7 +32,7 @@ Every item: `id`, `title` ("Artist – Album"), `subtitle`, `at`, `at_label`, `t
 | `failed` | Newest first. Answered whole up to `limit` | `limit` | Failed jobs still in the queue. `subtitle` is the reason. `tone` `danger` |
 | `wanted` | Newest first, by when it was added | `limit`, `since`, `cursor` | The Wanted list. `subtitle` "1977 · Album". `tone` `accent` |
 
-`meta` on job items (`downloads`, `failed`): `job_id`, `album_id`, `artist`, `album`, `kind` (`album`, `youtube`, `youtube_album`, `video` or `single`), `state` (`queued`, `downloading`, `verifying`, `filing`, `scanning`, `review`, `failed`), `percent`, `quality`.
+`meta` on job items (`downloads`, `failed`): `job_id`, `album_id`, `artist`, `album`, `kind` (`album`, `youtube`, `youtube_album`, `youtube_list`, `video` or `single`), `state` (`queued`, `downloading`, `verifying`, `filing`, `scanning`, `review`, `failed`), `percent`, `quality`.
 On `arrivals`: `job_id`, `album_id`, `artist`, `album`, `kind`, `where` (`library` or `import`), `folder`, `quality`, `message`.
 On `wanted`: `album_id`, `artist_id`, `artist`, `album`, `year`.
 

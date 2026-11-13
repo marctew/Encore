@@ -253,15 +253,16 @@ function openDialog() {
 // One YouTube video, named by hand: Encore guesses the names from the title and description.
 
 function openFree() {
-  detail = { view: 'free', summary: { id: '', title: 'Album from YouTube' }, free: true, freeVideo: null, freeForm: null };
+  detail = { view: 'free', summary: { id: '', title: 'Album from YouTube' }, free: true, freeVideo: null, freePlaylist: null, freeForm: null };
   openDialog();
   setTimeout(() => $('detail').querySelector('.free .yt-url')?.focus(), 50);
 }
 
 function freeBlock() {
-  const video = detail.freeVideo, form = detail.freeForm, working = detail.freeBusy;
-  const input = el('input', { class: 'input yt-url', type: 'url', inputmode: 'url', placeholder: 'Paste the YouTube link',
-    value: detail.freeTyped ?? (video ? watchUrl(video.id) : ''), disabled: working || undefined, 'aria-label': 'YouTube link for the whole album' });
+  const video = detail.freeVideo, list = detail.freePlaylist, form = detail.freeForm, working = detail.freeBusy;
+  const current = video ? watchUrl(video.id) : list ? `https://www.youtube.com/playlist?list=${list.id}` : '';
+  const input = el('input', { class: 'input yt-url', type: 'url', inputmode: 'url', placeholder: 'Paste the YouTube video or playlist link',
+    value: detail.freeTyped ?? current, disabled: working || undefined, 'aria-label': 'YouTube link for the whole album' });
   let sent = false;
   const commit = () => { if (sent || !input.value.trim()) return; sent = true; lookupFree(input.value.trim()); };
   input.onchange = commit;
@@ -269,12 +270,14 @@ function freeBlock() {
   input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } };
   const parts = [
     el('h2', { class: 'h1 detail-title' }, 'Album from YouTube'),
-    el('p', { class: 'small muted yt-intro' }, "For a whole album in one YouTube video, when MusicBrainz doesn't have the album (or the artist). Encore takes its sound, finds where each track starts from the video's chapters or the gaps between songs, and asks you to check before it cuts and files anything. It's filed as Artist/Album (Year), tagged from what you type here, with the video's thumbnail as the cover. The sound is AAC, as YouTube has it."),
+    el('p', { class: 'small muted yt-intro' }, "For an album MusicBrainz doesn't have (or whose artist it doesn't have), from YouTube. Paste one video of the whole album, and Encore finds where each track starts from its chapters or the gaps between songs, then asks you to check before it cuts anything. Or paste a playlist, such as a YouTube Music album, and each video is one track. It's filed as Artist/Album (Year), tagged from what you type here, with a video's thumbnail as the cover. The sound is AAC, as YouTube has it."),
     el('div', { class: 'yt-input-row' }, input),
     working ? el('div', { class: 'small muted yt-status' }, 'Looking it up…') : null,
     detail.freeError ? el('div', { class: 'why' }, `${detail.freeError}.`.replace(/\.\.$/, '.')) : null];
   if (video && !working) parts.push(videoCard(video, true));
-  if (form && !working) {
+  if (list && !working) parts.push(playlistCard(list));
+  if (form && !working && list) parts.push(...playlistForm(list, form));
+  else if (form && !working) {
     const field = (label, key, attrs = {}) => {
       const box = el('input', { class: 'input', value: form[key], 'aria-label': label, ...attrs });
       box.oninput = () => { form[key] = box.value; };
@@ -294,6 +297,56 @@ function freeBlock() {
       el('div', { class: 'yt-bar' }, el('span', {}), el('div', { class: 'row actions' }, queue)));
   }
   return el('section', { class: 'free' }, ...parts);
+}
+
+function playlistCard(list) {
+  const total = list.entries.reduce((sum, e) => sum + e.seconds, 0);
+  const facts = [plural(list.entries.length, 'video'), clock(total), list.missing ? `${list.missing} private or deleted left out` : ''].filter(Boolean).join(' · ');
+  return el('div', { class: 'yt-video' },
+    picture(list.entries[0].thumb, 'yt-thumb', glyph('stack', 'icon')),
+    el('div', { class: 'yt-video-body' },
+      el('a', { class: 'yt-video-title', href: `https://www.youtube.com/playlist?list=${list.id}`, target: '_blank', rel: 'noopener noreferrer' }, list.title || 'Playlist'),
+      el('div', { class: 'small muted' }, facts)));
+}
+
+// One row for each video kept: its name, its length, and a button to leave it out.
+function playlistForm(list, form) {
+  const field = (label, key, attrs = {}) => {
+    const box = el('input', { class: 'input', value: form[key], 'aria-label': label, ...attrs });
+    box.oninput = () => { form[key] = box.value; };
+    return el('label', { class: 'field free-field' }, el('span', { class: 'label' }, label), box);
+  };
+  const rows = form.rows.map((row, place) => {
+    const name = el('input', { class: 'input split-name', value: row.title, maxlength: 200, placeholder: `Track ${place + 1}`, 'aria-label': `Name of track ${place + 1}` });
+    name.oninput = () => { row.title = name.value; };
+    const drop = el('button', { type: 'button', class: 'btn-icon', title: 'Leave this one out', 'aria-label': `Leave out ${row.title || `track ${place + 1}`}`,
+      disabled: form.rows.length < 2 || undefined, onclick: () => { form.rows.splice(place, 1); renderDetail(true); } }, glyph('x', 'icon-sm'));
+    return el('li', { class: 'free-row' }, el('span', { class: 'num muted tabular' }, place + 1), name,
+      el('span', { class: 'time muted tabular' }, clock(row.seconds)), drop);
+  });
+  const left = list.entries.length - form.rows.length;
+  const job = detail.freeJob || jobs.find(j => j.album_id === `yt-list-${list.id}` && !['done', 'failed'].includes(j.state));
+  const queue = btn(job ? 'In the queue' : `Queue ${plural(form.rows.length, 'track')}`, event => queueFreeList(event.currentTarget), 'primary', { disabled: !!job || undefined });
+  const restore = left ? btn(`Put back ${left} left out`, () => { form.rows = freeRows(list, form.names); renderDetail(true); }) : null;
+  return [
+    el('div', { class: 'free-grid' }, field('Artist', 'artist'), field('Album', 'title'),
+      field('Year', 'year', { inputmode: 'numeric', maxlength: 4, placeholder: 'Blank if unknown', class: 'input free-year' })),
+    el('div', { class: 'field free-field' }, el('span', { class: 'label' }, 'Tracks'), el('ol', { class: 'free-rows' }, ...rows),
+      el('span', { class: 'hint' }, 'Each video is one track, in this order. Leave out any that aren\'t part of the album.')),
+    el('div', { class: 'yt-bar' }, el('span', {}), el('div', { class: 'row actions' }, restore, queue))];
+}
+
+const freeRows = (list, names) => list.entries.map((e, n) => ({ video: e.id, title: names[n] || e.title, seconds: e.seconds }));
+
+async function queueFreeList(button) {
+  const opened = detail, form = opened.freeForm, list = opened.freePlaylist;
+  const added = await busy(button, () => api('/api/queue/youtube/free', { method: 'POST', body: JSON.stringify({
+    playlist: list.id, artist: form.artist, title: form.title, year: form.year.trim(),
+    tracks: form.rows.map(row => ({ video: row.video, title: row.title })) }) }));
+  if (added === undefined) return;
+  toast(`${form.title} is in the queue: ${plural(form.rows.length, 'track')} from YouTube.`);
+  $('detail').close();
+  await refreshJobs();
 }
 
 function trackNames(text) {
@@ -319,8 +372,9 @@ async function lookupFree(url) {
   try {
     const found = await api('/api/youtube/album', { method: 'POST', body: JSON.stringify({ url }) });
     const guess = found.guess;
-    Object.assign(opened, { freeVideo: found.video, freeJob: found.job, freeTyped: undefined,
-      freeForm: { artist: guess.artist, title: guess.title, year: guess.year, tracks: guess.tracks.join('\n') } });
+    Object.assign(opened, { freeVideo: found.video || null, freePlaylist: found.playlist || null, freeJob: found.job, freeTyped: undefined,
+      freeForm: { artist: guess.artist, title: guess.title, year: guess.year, tracks: guess.tracks.join('\n'), names: guess.tracks,
+        rows: found.playlist ? freeRows(found.playlist, guess.tracks) : null } });
   } catch (error) {
     opened.freeError = error.message;
   }
@@ -1059,7 +1113,7 @@ function jobCard(job) {
     const album = { id: job.album_id, title: job.title, artist: job.artist, year: job.year, cover: job.cover };
     if (job.kind === 'youtube') buttons.push(btn('Change links', () => openAlbum(album, false, 'youtube')));
     else if (job.kind === 'youtube_album' && !job.source.free) buttons.push(btn('Change the video', () => openAlbum(album, false, 'youtube')));
-    else if (job.kind !== 'video' && job.kind !== 'single') buttons.push(btn('Pick another', () => openAlbum(album)));
+    else if (job.kind !== 'video' && job.kind !== 'single' && !(job.source && job.source.free)) buttons.push(btn('Pick another', () => openAlbum(album)));
     buttons.push(btn('Retry', event => act(`/api/queue/${job.id}/retry`, 'POST', event.currentTarget)));
   }
   if (job.state === 'failed' && (job.can_import || job.message.startsWith('Not all FLAC'))) {
@@ -1217,7 +1271,7 @@ function show(next, { push = true } = {}) {
     $('viewSub').textContent = VIEWS[shown][1];
   }
   $('viewActions').replaceChildren();
-  if (shown === 'find') $('viewActions').append(btn('Album from YouTube', () => openFree(), 'ghost', { title: "Split one YouTube video of a whole album that MusicBrainz doesn't have" }));
+  if (shown === 'find') $('viewActions').append(btn('Album from YouTube', () => openFree(), 'ghost', { title: "An album MusicBrainz doesn't have, from one YouTube video or a playlist" }));
   const tab = next === 'artist' ? cameFrom : next;
   document.querySelectorAll('.nav-link[data-view], .bottom-nav [data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === tab));
   const title = next === 'artist' ? (page && page.artist ? page.artist.name : 'Artist') : VIEWS[next][0];

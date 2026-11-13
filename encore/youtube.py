@@ -22,6 +22,8 @@ log = logging.getLogger("encore")
 BIN = Path(sys.executable).parent
 HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtu.be"}
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+PLAYLIST_ID = re.compile(r"^(PL|OLAK5uy_|OL|RDCLAK)[A-Za-z0-9_-]{10,64}$")
+GONE = ("[private video]", "[deleted video]", "[unavailable video]")
 SORT = "res:1080,vcodec:h264,acodec:m4a"
 LOOKUP_SECONDS = 45
 CACHE_AGE = 7 * 86400
@@ -70,6 +72,36 @@ def youtube_id(text):
     return candidate if VIDEO_ID.match(candidate) else None
 
 
+def playlist_id(text):
+    """The playlist id in a YouTube playlist link (or a bare id), or None. A watch link that's inside a
+    YouTube Music album (list=OLAK5uy_...) counts as the album: that's what pasting it from there means."""
+    text = str(text or "").strip()
+    if PLAYLIST_ID.match(text):
+        return text
+    if not re.match(r"^https?://", text, re.I):
+        text = "https://" + text
+    try:
+        parts = urlsplit(text)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return None
+    if host not in HOSTS:
+        return None
+    path = [p for p in parts.path.split("/") if p]
+    candidate = (parse_qs(parts.query).get("list") or [""])[0]
+    if not PLAYLIST_ID.match(candidate):
+        return None
+    if path == ["playlist"] or (path == ["watch"] and candidate.startswith("OLAK5uy_")):
+        return candidate
+    return None
+
+
+def playlist_url(list_id):
+    if not PLAYLIST_ID.match(list_id):
+        raise SourceError("That isn't a YouTube playlist")
+    return f"https://www.youtube.com/playlist?list={list_id}"
+
+
 def watch_url(video_id):
     if not VIDEO_ID.match(video_id):
         raise SourceError("That isn't a YouTube video")
@@ -84,6 +116,7 @@ def summary(entry):
             "live": entry.get("live_status") in ("is_live", "is_upcoming"),
             "year": str(entry.get("release_year") or entry.get("upload_date") or "")[:4],
             "chapters": chapters(entry), "tracklist": description_tracks(entry.get("description") or ""),
+            "released": str(entry.get("release_year") or ""), "album": entry.get("album") or "", "artist": entry.get("artist") or "",
             "recorded": described_year(entry.get("description") or "")}
 
 
@@ -232,6 +265,19 @@ class YouTube:
             raise SourceError("YouTube sent a different video")
         self.store.save_youtube_video(video)
         return video
+
+    def playlist(self, list_id):
+        """A playlist's name and its videos in order, leaving out any that are private or deleted."""
+        found = self.run("-J", "--flat-playlist", "--", playlist_url(list_id))
+        entries, missing = [], 0
+        for entry in found.get("entries") or []:
+            if (not VIDEO_ID.match(entry.get("id") or "") or not entry.get("duration")
+                    or str(entry.get("title") or "").casefold() in GONE):
+                missing += 1
+                continue
+            entries.append(summary(entry))
+        return {"id": list_id, "title": found.get("title") or "", "channel": found.get("channel") or found.get("uploader") or "",
+                "entries": entries, "missing": missing}
 
     def search(self, text, count=8):
         found = self.run("-J", "--flat-playlist", "--", f"ytsearch{count}:{text}")

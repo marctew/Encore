@@ -8,7 +8,7 @@ import re
 import shutil
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from types import SimpleNamespace
 
 from urllib.parse import quote
@@ -26,7 +26,7 @@ from .filing import norm
 from .plex import Plex
 from .sources import Deezer, Indexers, MusicBrainz, Sabnzbd, Settings, SourceError, Web
 from .store import Store
-from .youtube import YouTube, youtube_id
+from .youtube import YouTube, playlist_id, youtube_id
 
 PLEX_SYNC = 3600
 PHOTO_RETRY = 30 * 86400
@@ -868,14 +868,47 @@ def album_guess(video):
     return {"artist": artist, "title": album, "year": video.get("recorded") or "", "tracks": tracks}
 
 
+def playlist_guess(playlist, first):
+    """For a playlist that's an album: YouTube Music's own album playlists name the album, and their
+    first video names the artist and the year it came out. Otherwise the playlist's name, the channel
+    most of its videos come from, and each video's song from its title."""
+    entries = playlist["entries"]
+    channels = Counter(re.sub(r"\s*-\s*Topic$|VEVO$", "", e["channel"], flags=re.I).strip() for e in entries if e["channel"])
+    artist = (first or {}).get("artist", "").split(",")[0].strip() or (channels.most_common(1)[0][0] if channels else playlist["channel"])
+    title = (first or {}).get("album") or re.sub(r"^album\s*[-–:]\s*", "", playlist["title"], flags=re.I)
+    title = " ".join(ALBUM_NOISE.sub(" ", title).split())
+    year = (first or {}).get("released") or (first or {}).get("recorded") or ""
+    names = [e["title"] if match.audio_only(e["channel"]) else (match.youtube_song(artist, e) or e["title"]) for e in entries]
+    return {"artist": artist, "title": title, "year": year, "tracks": names}
+
+
+def playlist_lookup(s, list_id):
+    playlist = s.youtube.playlist(list_id)
+    if not playlist["entries"]:
+        raise Refusal(409, "That playlist has no videos Encore can use")
+    if len(playlist["entries"]) > 99:
+        raise Refusal(409, "That playlist has more than 99 videos, which is more than an album")
+    for video in playlist["entries"]:
+        s.store.save_youtube_video(video)
+    try:
+        first = s.youtube.lookup(playlist["entries"][0]["id"], fresh=True)
+    except SourceError:
+        first = None
+    job = next((j for j in s.queue.jobs if j["album_id"] == f"yt-list-{list_id}" and j["state"] in ACTIVE), None)
+    return jsonify(playlist=playlist, guess=playlist_guess(playlist, first), job=public(job) if job else None)
+
+
 @bp.post("/api/youtube/album")
 def youtube_free_lookup():
-    """Looks up one video of an album MusicBrainz doesn't have, with Encore's guess at its details."""
+    """Looks up one video, or a playlist, of an album MusicBrainz doesn't have, with Encore's guess at its details."""
     s = svc()
     text = str(body().get("url", "")).strip()
+    list_id = playlist_id(text)
+    if list_id:
+        return playlist_lookup(s, list_id)
     video_id = youtube_id(text)
     if not video_id:
-        raise Refusal(400, "Paste a YouTube video link")
+        raise Refusal(400, "Paste a YouTube video or playlist link")
     video = s.youtube.lookup(video_id, fresh=True)
     if video["live"]:
         raise Refusal(409, "That's a live stream, not an upload")
@@ -883,27 +916,59 @@ def youtube_free_lookup():
     return jsonify(video=video, guess=album_guess(video), job=public(job) if job else None)
 
 
-@bp.post("/api/queue/youtube/free")
-def add_youtube_free_job():
-    data, s = body(), svc()
-    video_id = youtube_id(str(data.get("video", "")))
-    cached = s.store.youtube_video(video_id) if video_id else None
-    if not cached:
-        raise Refusal(409, "Look the video up first")
+def typed_album(data):
     artist, title = (" ".join(str(data.get(k, "")).split())[:200] for k in ("artist", "title"))
     year = str(data.get("year", "")).strip()
     if not artist or not title:
         raise Refusal(400, "Type the artist and the album's name")
     if year and not re.fullmatch(r"(19|20)\d\d", year):
         raise Refusal(400, "The year should be four digits, like 2001, or blank")
+    if not folders_ready():
+        raise Refusal(409, "Set your folders in Settings first")
+    return artist, title, year
+
+
+def add_youtube_list_job(s, data, list_id):
+    """Each video of the playlist that's kept is one track, in the order sent, with the name typed for it."""
+    rows = data.get("tracks")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 99:
+        raise Refusal(400, "Keep at least one track, and no more than 99")
+    tracks, seen = [], set()
+    for place, row in enumerate(rows):
+        video_id = youtube_id(str((row or {}).get("video", ""))) if isinstance(row, dict) else None
+        cached = s.store.youtube_video(video_id) if video_id else None
+        if not cached or video_id in seen:
+            raise Refusal(409, "Look the playlist up again")
+        seen.add(video_id)
+        video = cached["video"]
+        name = " ".join(str(row.get("title", "")).split())[:200] or f"Track {place + 1}"
+        tracks.append({"video": video_id, "title": name, "seconds": video["seconds"], "channel": video["channel"]})
+    artist, title, year = typed_album(data)
+    with s.queue.lock:
+        if any(j["album_id"] == f"yt-list-{list_id}" and j["state"] in ACTIVE for j in s.queue.jobs):
+            raise Refusal(409, "Already queued")
+    return jsonify(public(s.queue.add_youtube_list(list_id, artist, title, year, tracks)))
+
+
+@bp.post("/api/queue/youtube/free")
+def add_youtube_free_job():
+    data, s = body(), svc()
+    if data.get("playlist"):
+        list_id = playlist_id(str(data["playlist"]))
+        if not list_id:
+            raise Refusal(400, "That isn't a YouTube playlist")
+        return add_youtube_list_job(s, data, list_id)
+    video_id = youtube_id(str(data.get("video", "")))
+    cached = s.store.youtube_video(video_id) if video_id else None
+    if not cached:
+        raise Refusal(409, "Look the video up first")
+    artist, title, year = typed_album(data)
     names = data.get("tracks") or []
     if not isinstance(names, list) or len(names) > 99:
         raise Refusal(400, "Up to 99 tracks, one name each")
     names = [" ".join(str(n).split())[:200] for n in names if str(n).strip()]
     if len(names) == 1:
         raise Refusal(400, "One track is nothing to split. List them all, or leave the list empty")
-    if not folders_ready():
-        raise Refusal(409, "Set your folders in Settings first")
     with s.queue.lock:
         if any(j["album_id"] == f"yt-album-{video_id}" and j["state"] in ACTIVE for j in s.queue.jobs):
             raise Refusal(409, "Already queued")
@@ -1029,8 +1094,8 @@ def retry(job_id, partial=False, keep_format=False):
         with queue.lock:
             job["source"] = {"type": "youtube", "edition": edition, "tracks": tracks}
             job["tracks"] = len(tracks)
-    elif job.get("kind") == "youtube_album":
-        pass                                  # the download stays: it goes back to the check without fetching it again
+    elif job.get("kind") in ("youtube_album", "youtube_list"):
+        pass                                  # the downloads stay: a retry doesn't fetch them again
     elif keep_format:
         job["any_format"] = True
     elif not partial:

@@ -189,6 +189,9 @@ a.yt-video-title:hover { color: rgb(var(--accent)); }
 .free-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px; gap: 12px; }
 .free .field + .field { margin-top: 0; }
 .free-tracks { width: 100%; resize: vertical; font: inherit; line-height: 22px; }
+.free-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.free-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.free-row .num { text-align: right; }
 .job-kind { margin-left: 8px; vertical-align: 1px; }
 
 /* ---------------------------------------------------------- the queue */
