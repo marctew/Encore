@@ -23,7 +23,7 @@ from mutagen.mp4 import MP4  # noqa: E402
 
 from encore import api, engine, split  # noqa: E402
 from encore import web as server  # noqa: E402
-from encore.youtube import description_chapters, youtube_id  # noqa: E402
+from encore.youtube import description_chapters, description_tracks, youtube_id  # noqa: E402
 
 results = []
 HEAD = {"X-Encore": "1"}
@@ -48,7 +48,18 @@ WHOLE_ID = "44444444-4444-4444-4444-444444444444"
 WHOLE_TITLES = ["First", "Second", "Third", "Fourth"]
 WHOLE_LENGTHS = [21, 40, 26, 22]                  # MusicBrainz's lengths; the real starts are 0, 20.75, 61.5, 87.5
 SEGMENTS = [[440, 20], [0, 1.5], [550, 19], [0, 0.8], [550, 20.2], [660, 25], [0, 2], [770, 21.5]]
+# An album MusicBrainz doesn't have: five tracks with 2 s gaps and a 0.6 s pause inside track 2, a track
+# list in the description with no timestamps, and two chapters YouTube made up.
+FREE_SEGMENTS = [[300, 40], [0, 2], [350, 19], [0, 0.6], [350, 20], [0, 2], [400, 40], [0, 2], [450, 40], [0, 2], [500, 40]]
+FREE_STARTS = [0, 41, 82.6, 124.6, 166.6, 207.6]
+FREE_NAMES = ["Wild Rover", "Leave it Lay", "Tim Finnegans Wake", "Wild Sky", "Spanish Lady"]
 VIDEOS.update({
+    "freealbum01": {"title": '"Busking On" Full Album~Free Busker~*~', "channel": "Some Uploader", "duration": 208, "segments": FREE_SEGMENTS,
+                    "upload_date": "20190304",
+                    "description": "Recorded in Feb 2000~\nat a studio~\nTrack list~\n\n" + "\n".join(f"{n} *" for n in FREE_NAMES)
+                                   + "\n\n*Traditional\nMore at https://example.invalid",
+                    "chapters": [{"start_time": 0, "end_time": 100, "title": "<Untitled Chapter 1>"},
+                                 {"start_time": 100, "end_time": 208, "title": "looking for your shoes"}]},
     "wholealbum1": {"title": "Test Band - Whole Thing (Full Album)", "channel": "Test Band", "duration": 110, "segments": SEGMENTS,
                     "description": "Tracklist:\n0:00 First\n0:21 Second\n1:01 Third (Remastered)\n1:27 Fourth\n\nThanks for listening"},
     "wholealbum2": {"title": "Test Band - Whole Thing", "channel": "Fan Uploads", "duration": 110, "segments": SEGMENTS,
@@ -350,6 +361,7 @@ def main():
            and not (music / "Test Band" / "Something-video.mp4").exists(), (job["message"], job.get("folder")))
 
     check_whole(client, s, music, downloads_dir)
+    check_free(client, s, music, downloads_dir)
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return 0 if all(results) else 1
@@ -477,6 +489,100 @@ def check_whole(client, s, music, downloads_dir):
            and not any(m["gap"] for m in plan["marks"][1:]), plan["cuts"])
     plan = split.plan([-20.0] * 900, [20, 20, 20], [{"start": 0, "title": "a"}, {"start": 30, "title": "b"}])
     expect("a mismatched chapter count and length are warned about", len(plan["warnings"]) == 2 and plan["source"] == "lengths", plan["warnings"])
+
+
+def check_free(client, s, music, downloads_dir):
+    """One video of an album MusicBrainz doesn't have: named by hand, split at the gaps, checked and filed."""
+    real = ("Recorded in Feb 2000~\nat Satellite Studios~\nTrack list~\n\nWild Rover *\nLeave it Lay **\nThe Bands Played Waltzin' Matilda ***\n"
+            "Galway Bay *\n\n*Traditional, arr Deane\n** by Alan Deane")
+    expect("a track list without timestamps is read", description_tracks(real) == ["Wild Rover", "Leave it Lay", "The Bands Played Waltzin' Matilda", "Galway Bay"],
+           description_tracks(real))
+    expect("so is a numbered list with lengths", description_tracks("1. One (3:21)\n2. Two (4:40)\n3. Three [2:26]\nSubscribe!") == ["One", "Two", "Three"])
+    expect("prose isn't a track list", description_tracks("Some text\nmore text\nand more\nhttps://x.invalid") == [])
+    guess = server.album_guess({"title": '"Celtic Journey" Full Album~Belfast Busker~Alan Deane~*~', "channel": "Keltic Rambler",
+                                "chapters": [], "tracklist": ["A", "B", "C"], "recorded": "2000"})
+    expect("the album is guessed from a quoted title", guess == {"artist": "Keltic Rambler", "title": "Celtic Journey", "year": "2000",
+                                                                "tracks": ["A", "B", "C"]}, guess)
+    guess = server.album_guess({"title": "Test Band - Night Songs (Full Album)", "channel": "Uploads", "chapters": [], "tracklist": [], "recorded": ""})
+    expect("and from Artist - Album", guess["artist"] == "Test Band" and guess["title"] == "Night Songs", guess)
+
+    s.queue.jobs.clear()
+    subprocess.run(["rm", "-rf", str(music / "Free Busker")], check=True)
+    (FAKE / "downloads.log").unlink(missing_ok=True)
+    expect("a link is needed", client.post("/api/youtube/album", json={"url": "Busking On"}, headers=HEAD).status_code == 400)
+    found = client.post("/api/youtube/album", json={"url": "https://youtu.be/freealbum01"}, headers=HEAD).get_json()
+    expect("the video is looked up with Encore's guess", found["guess"] == {"artist": "Some Uploader", "title": "Busking On", "year": "2000",
+                                                                         "tracks": FREE_NAMES} and found["job"] is None, found.get("guess"))
+    expect("YouTube's made-up chapter has no name", [c["title"] for c in found["video"]["chapters"]] == ["", "looking for your shoes"])
+    queue_it = lambda **body: client.post("/api/queue/youtube/free", headers=HEAD, json={"video": "freealbum01", "artist": "Free Busker",  # noqa: E731
+                                                                                        "title": "Busking On", "year": "2000", "tracks": FREE_NAMES, **body})
+    expect("the artist is needed", queue_it(artist=" ").status_code == 400)
+    expect("a year must be a year", queue_it(year="00").status_code == 400)
+    expect("one track is refused", queue_it(tracks=["Only"]).status_code == 400)
+    expect("a video never looked up is refused", queue_it(video="aaaaaaaaaa9").status_code == 409)
+
+    job = queue_it().get_json()
+    expect("can't queue it twice", queue_it().status_code == 409)
+    job = wait(s.queue, job["id"], ("review", "failed"))
+    expect("it waits to be checked", job["state"] == "review", job["message"])
+    plan = client.get(f"/api/queue/{job['id']}/split").get_json()
+    cuts = plan.get("cuts", [])
+    expect("the five longest gaps are the starts", plan.get("free") and plan["source"] == "gaps" and len(cuts) == 6
+           and all(near(a, b) for a, b in zip(cuts, FREE_STARTS)), cuts)
+    expect("the pause inside a track isn't one", not any(near(c, 61.8, 1) for c in cuts))
+    expect("tracks are named from the list", plan["titles"] == FREE_NAMES and [t["title"] for t in plan["tracks"]] == FREE_NAMES)
+    expect("chapters that don't fit are warned about", any("2 chapters" in w for w in plan["warnings"]), plan["warnings"])
+    expect("each start found at a gap", all(m["gap"] for m in plan["marks"][1:]), plan["marks"])
+
+    send = lambda body: client.post(f"/api/queue/{job['id']}/split", json=body, headers=HEAD)  # noqa: E731
+    expect("names must match the tracks", send({"cuts": cuts, "titles": FREE_NAMES[:4]}).status_code == 400)
+    joined = [cuts[0], cuts[2], cuts[3], cuts[4], cuts[5]]
+    response = send({"cuts": joined, "titles": ["Rover and Lay", *FREE_NAMES[2:]]})
+    expect("two tracks can be joined", response.status_code == 200 and response.get_json()["titles"][0] == "Rover and Lay", response.get_data(as_text=True))
+    split_again = [cuts[0], cuts[1], cuts[2], cuts[3], 150.0, cuts[4], cuts[5]]
+    response = send({"cuts": split_again, "titles": [*FREE_NAMES[:4], "", "Spanish Lady"]})
+    plan = client.get(f"/api/queue/{job['id']}/split").get_json()
+    expect("a track can be added, and a blank name becomes Track N", plan["titles"][4] == "Track 5" and len(plan["cuts"]) == 7, plan["titles"])
+    expect("an added start is marked as yours, the others keep Encore's marks",
+           plan["marks"][4]["from"] == "you" and plan["marks"][3]["from"] == "gap" and len(plan["marks"]) == 6, plan["marks"])
+    expect("Encore's own plan is kept for Undo", plan["found"] == cuts and plan["found_titles"] == FREE_NAMES)
+
+    titles = [*FREE_NAMES[:3], "Wild Sky", "Spanish Lady"]
+    response = send({"cuts": cuts, "titles": titles, "file": True})
+    expect("filing is accepted", response.status_code == 200, response.get_data(as_text=True))
+    job = wait(s.queue, job["id"])
+    expect("the album is filed as Artist/Album (Year)", job["state"] == "done" and job.get("folder") == "Free Busker/Busking On (2000)",
+           (job["message"], job.get("folder")))
+    folder = music / "Free Busker" / "Busking On (2000)"
+    names = sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+    expect("named from what was typed", names == [f"0{n + 1} - {t}.m4a" for n, t in enumerate(titles)] + ["cover.jpg"], names)
+    tags = MP4(folder / "03 - Tim Finnegans Wake.m4a") if names else {}
+    expect("tagged from what was typed", tags.get("\xa9alb") == ["Busking On"] and tags.get("\xa9ART") == ["Free Busker"]
+           and tags.get("aART") == ["Free Busker"] and tags.get("trkn") == [(3, 5)] and tags.get("\xa9day") == ["2000"]
+           and tags.get("\xa9nam") == ["Tim Finnegans Wake"], dict(tags or {}).keys())
+    expect("the thumbnail is the cover", bool(tags.get("covr")))
+    seconds = [MP4(folder / n).info.length for n in names if n.endswith(".m4a")]
+    expect("each cut where it was checked", len(seconds) == 5 and all(near(a, b - c, 0.15) for a, b, c in zip(seconds, cuts[1:], cuts)),
+           [round(x, 1) for x in seconds])
+    expect("the download is cleared", not any(downloads_dir.rglob("album.m4a")))
+
+    # No track list: the clear gaps decide
+    s.queue.jobs.clear()
+    subprocess.run(["rm", "-rf", str(music / "Free Busker")], check=True)
+    job = wait(s.queue, queue_it(tracks=[], year="").get_json()["id"], ("review", "failed"))
+    plan = client.get(f"/api/queue/{job['id']}/split").get_json() if job["state"] == "review" else {"cuts": [], "titles": [], "warnings": []}
+    expect("with no list, every clear gap starts a track", len(plan["cuts"]) == 6 and all(near(a, b) for a, b in zip(plan["cuts"], FREE_STARTS)),
+           plan["cuts"])
+    expect("and they're named Track 1 to 5 for now", plan["titles"] == [f"Track {n}" for n in range(1, 6)], plan["titles"])
+    expect("and it says to check the count", any("found 5 tracks" in w for w in plan["warnings"]), plan["warnings"])
+    client.delete(f"/api/queue/{job['id']}", headers=HEAD)
+
+    # The plan on its own: too few gaps for the tracks
+    levels = [-20.0] * 900
+    levels[300:320] = [-90.0] * 20
+    plan = split.plan_free(levels, 3, [])
+    expect("too few gaps: the rest go halfway and are marked", plan["cuts"][1] == 31.0 and len(plan["cuts"]) == 4
+           and [m["gap"] for m in plan["marks"][1:]] == [True, False] and "put halfway" in plan["warnings"][0], (plan["cuts"], plan["warnings"]))
 
 
 if __name__ == "__main__":

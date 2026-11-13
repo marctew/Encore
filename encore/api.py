@@ -139,6 +139,8 @@ def job_text(job):
 
 
 def image_for(job):
+    if (job.get("source") or {}).get("free"):
+        return None                                   # no MusicBrainz cover: it's the video's thumbnail
     if job.get("kind") in ("video", "single"):
         return f"/api/v1/images/artist/{job['artist_id']}" if job.get("artist_id") else None
     return f"/api/v1/images/cover/{job['album_id']}"

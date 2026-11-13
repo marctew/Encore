@@ -305,6 +305,24 @@ class Queue:
         self.wake.set()
         return job
 
+    def add_youtube_free(self, video, artist, title, year, names):
+        """One video of an album MusicBrainz doesn't have, named by a person. names may be empty: then
+        the gaps decide how many tracks there are, and they're named when the tracks are checked."""
+        tracks = [{"key": f"1-{n + 1}", "disc": 1, "number": n + 1, "title": name, "seconds": 0} for n, name in enumerate(names)]
+        job = {"title": title, "artist": artist, "year": year, "cover": video.get("thumb") or "",
+               "album_id": f"yt-album-{video['id']}", "id": uuid.uuid4().hex[:12], "kind": "youtube_album", "state": "queued",
+               "percent": 0, "message": "", "step": "", "fix_artist": True, "folder": "", "quality": "", "added": time.time(),
+               "partial": False, "tracks": len(tracks),
+               "source": {"type": "youtube", "free": True, "video": video["id"], "title": video["title"],
+                          "seconds": video["seconds"], "channel": video["channel"], "chapters": video.get("chapters") or [],
+                          "tracks": tracks}}
+        with self.lock:
+            self.jobs.append(job)
+            self.update()
+        self.tell(job, None)
+        self.wake.set()
+        return job
+
     def update(self, job=None, **changes):
         with self.lock:
             old = job.get("state") if job else None
@@ -599,15 +617,18 @@ class Queue:
     def process_youtube_album(self, job):
         """Downloads the sound, finds where each track starts and stops for a person to check (NeedsReview).
         Run again once they've confirmed, it cuts the tracks where they said, then tags and files them."""
-        album = self.brainz.album(job["album_id"])
         source = job["source"]
-        edition = next((e for e in album["editions"] if e["id"] == source["edition"]), None)
-        if not edition:
-            raise JobFailed("That edition has gone from MusicBrainz. Open the album and build it again.")
+        free = source.get("free")
+        album = edition = None
         tracks = source["tracks"]
-        listed = {(t["disc"], t["number"]): t for t in edition["tracks"]}
-        if len(listed) != len(tracks) or any((t["disc"], t["number"]) not in listed for t in tracks):
-            raise JobFailed("The track list has changed on MusicBrainz. Open the album and build it again.")
+        if not free:
+            album = self.brainz.album(job["album_id"])
+            edition = next((e for e in album["editions"] if e["id"] == source["edition"]), None)
+            if not edition:
+                raise JobFailed("That edition has gone from MusicBrainz. Open the album and build it again.")
+            listed = {(t["disc"], t["number"]): t for t in edition["tracks"]}
+            if len(listed) != len(tracks) or any((t["disc"], t["number"]) not in listed for t in tracks):
+                raise JobFailed("The track list has changed on MusicBrainz. Open the album and build it again.")
         sound = self.album_audio(job)
         job["kept"] = True                                    # the download stays for the check, and for a retry
         self.check_cancel(job)
@@ -622,10 +643,21 @@ class Queue:
                     levels = split.loudness(sound)
                 except split.SplitError as error:
                     raise JobFailed(f"{error}. Retry to fetch it again.") from None
-                plan = split.plan(levels, [t["seconds"] for t in tracks], source.get("chapters") or [])
+                if free:
+                    plan = split.plan_free(levels, len(tracks) or None, source.get("chapters") or [])
+                    given = [t["title"] for t in tracks]
+                    names = plan.pop("names")
+                    count = len(plan["cuts"]) - 1
+                    plan["titles"] = given if len(given) == count else [
+                        (names[n] if n < len(names) else "") or f"Track {n + 1}" for n in range(count)]
+                    plan["found_titles"] = list(plan["titles"])
+                else:
+                    plan = split.plan(levels, [t["seconds"] for t in tracks], source.get("chapters") or [])
                 plan["found"] = list(plan["cuts"])
                 split.save(plan_file, plan)
             raise NeedsReview
+        if free:
+            return self.file_free(job, sound, plan)
         self.update(job, state="verifying", message="Cutting and checking every track.", step="", percent=100)
         cuts = plan["cuts"]
         album_dir = sound.parent / filing.safe(f"{job['artist']} - {job['title']} [{job['id']}]")
@@ -656,6 +688,45 @@ class Queue:
         self.update(job, state="filing", message="Filing the album.", step="")
         self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
         job["kept"] = False                                   # filed: the download can go
+
+    def file_free(self, job, sound, plan):
+        """The checked tracks of an album MusicBrainz doesn't have: cut, tagged from what the person typed,
+        the video's thumbnail as the cover, and filed as Artist/Album (Year)."""
+        source = job["source"]
+        self.update(job, state="verifying", message="Cutting and checking every track.", step="", percent=100)
+        cuts, titles = plan["cuts"], plan["titles"]
+        album_dir = sound.parent / filing.safe(f"{job['artist']} - {job['title']} [{job['id']}]")
+        shutil.rmtree(album_dir, ignore_errors=True)
+        album_dir.mkdir(parents=True)
+        files = []
+        for place, title in enumerate(titles):
+            self.check_cancel(job)
+            track = {"disc": 1, "number": place + 1, "title": title}
+            target = album_dir / track_file(track, False)
+            start, end = cuts[place], cuts[place + 1]
+            if not split.cut(sound, target, start, end) or not decode_ok(target):
+                raise JobFailed(f"{track_label(track)}: Encore couldn't cut it out of the download.")
+            seconds = float((probe(target).get("format") or {}).get("duration") or 0)
+            if abs(seconds - (end - start)) > 1.0:
+                raise JobFailed(f"{track_label(track)}: the cut came out {seconds:.0f} seconds long, not {end - start:.0f}.")
+            audio = mutagen.File(target, easy=True)
+            if audio.tags is None:
+                audio.add_tags()
+            audio["title"], audio["album"] = title, job["title"]
+            audio["artist"] = audio["albumartist"] = job["artist"]
+            audio["tracknumber"], audio["discnumber"] = f"{place + 1}/{len(titles)}", "1/1"
+            if job.get("year"):
+                audio["date"] = job["year"]
+            audio.save()
+            files.append(target)
+        thumbnail_cover(self.brainz.web, source["video"], album_dir, files)
+        rates = [getattr(mutagen.File(path).info, "bitrate", 0) for path in files]
+        job["quality"] = f"YouTube AAC {min(rates) // 1000}" if rates and min(rates) else "YouTube AAC"
+        job["tracks"] = len(files)
+        self.check_cancel(job)
+        self.update(job, state="filing", message="Filing the album.", step="")
+        self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
+        job["kept"] = False
 
     def split_plan(self, job):
         """The saved plan for a whole-album job that's waiting to be checked (or has failed after it)."""
