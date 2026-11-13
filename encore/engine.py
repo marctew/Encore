@@ -253,6 +253,23 @@ class Queue:
         self.wake.set()
         return job
 
+    def add_youtube_video(self, artist, video, song, want_video=True, want_audio=False):
+        """One song from YouTube that MusicBrainz may not list yet: its music video, filed like a Usenet one,
+        and with want_audio its sound as a one-track single. A video-only job is an ordinary "video" job."""
+        job = {"title": song, "artist": artist["name"], "artist_id": artist["id"], "year": "", "tracks": 1,
+               "cover": f"/api/artist/{artist['id']}/photo", "album_id": f"video-yt-{video['id']}",
+               "kind": "single" if want_audio else "video", "want_video": want_video,
+               "id": uuid.uuid4().hex[:12], "state": "queued", "percent": 0, "message": "", "step": "", "fix_artist": False,
+               "folder": "", "quality": "", "added": time.time(), "partial": False,
+               "source": {"type": "youtube", "video": video["id"], "title": video["title"], "seconds": video["seconds"],
+                          "channel": video["channel"]}}
+        with self.lock:
+            self.jobs.append(job)
+            self.update()
+        self.tell(job, None)
+        self.wake.set()
+        return job
+
     def add_youtube(self, album, edition, tracks, partial):
         """tracks: [{key, disc, number, title, video, seconds, channel}], the linked tracks of one edition."""
         job = {key: album[key] for key in ("title", "artist", "year", "cover")}
@@ -391,8 +408,10 @@ class Queue:
         self.update(job, state="downloading", message="")
         if job.get("kind") == "youtube":
             return self.process_youtube(job)
+        if job.get("kind") == "single":
+            return self.process_single(job)
         if job.get("kind") == "video":
-            source = self.download(job)
+            source = self.fetch_video(job) if job["source"].get("type") == "youtube" else self.download(job)
             self.check_cancel(job)
             self.update(job, state="verifying", message="Checking the video.")
             chosen = prepare_video(source, job)
@@ -506,6 +525,71 @@ class Queue:
         self.update(job, state="filing", message="Filing the album.", step="")
         self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
         self.file_videos(job, album, tracks, listed, videos)
+
+    def fetch_video(self, job):
+        """A single YouTube music video, into its own folder under Downloads, for prepare_video to check."""
+        folder = DOWNLOADS / "encore-youtube" / job["id"]
+        make_folder(DOWNLOADS)
+        need = (job["source"].get("seconds") or 300) * YOUTUBE_BYTES_PER_SECOND
+        if shutil.disk_usage(DOWNLOADS).free < need * 2 + MIN_FREE:
+            raise JobFailed("Not enough free space on the share for this video.")
+        shutil.rmtree(folder, ignore_errors=True)
+        self.update(job, storage=str(folder), step="YouTube video", percent=0)
+        shown = [0.0]
+
+        def progress(value):
+            if value - shown[0] >= 1:
+                shown[0] = value
+                self.update(job, percent=round(value, 1))
+
+        path = self.youtube.download(job["source"]["video"], folder, progress, lambda: job.get("cancel"))
+        if path is None:
+            self.check_cancel(job)
+            raise Cancelled
+        self.update(job, percent=100)
+        return folder
+
+    def process_single(self, job):
+        """A song MusicBrainz doesn't list yet, filed from its YouTube upload as a one-track single,
+        Artist/Song (Year), and its video beside the artist's others when that was asked for too.
+        There's no track list to check against, so the download's own length is what it's held to."""
+        source = job["source"]
+        if not source.get("year"):
+            try:
+                source["year"] = self.youtube.lookup(source["video"], fresh=True).get("year") or ""
+            except SourceError:
+                pass
+        folder = self.fetch_video(job)
+        self.check_cancel(job)
+        self.update(job, state="verifying", message="Checking the song.", step="")
+        video = folder / f"{source['video']}.mp4"
+        if job.get("want_video"):
+            prepare_video(folder, job)
+        year = source.get("year") or time.strftime("%Y")
+        album_dir = folder / filing.safe(f"{job['artist']} - {job['title']} [{job['id']}]")
+        shutil.rmtree(album_dir, ignore_errors=True)
+        album_dir.mkdir(parents=True)
+        track = {"disc": 1, "number": 1, "title": job["title"]}
+        target = album_dir / track_file(track, False)
+        youtube_audio(video, target, f"“{job['title']}”", source.get("seconds"))
+        audio = mutagen.File(target, easy=True)
+        if audio.tags is None:
+            audio.add_tags()
+        audio["album"] = audio["title"] = job["title"]
+        audio["artist"] = audio["albumartist"] = job["artist"]
+        audio["tracknumber"], audio["discnumber"], audio["date"] = "1", "1", year
+        audio.save()
+        thumbnail_cover(self.brainz.web, source["video"], album_dir, [target])
+        rate = getattr(mutagen.File(target).info, "bitrate", 0)
+        job["year"] = year
+        job["quality"] = f"YouTube AAC {rate // 1000}" if rate else "YouTube AAC"
+        self.check_cancel(job)
+        self.update(job, state="filing", message="Filing the single.", step="")
+        self.update(job, **file_album(album_dir, job["id"], self.library, report=self.reporter(job)))
+        if not job.get("want_video"):
+            return
+        where = filing.to_artist(video, job["artist"], job["title"], MUSIC, job["id"], skip_existing=True)
+        self.update(job, videos_filed=[where] if where else [], video_note="Video filed." if where else "Video already there.")
 
     def fetch_videos(self, job, tracks, folder, label="Track"):
         """Downloads each track's video, skipping any already here from an earlier try."""
@@ -796,6 +880,33 @@ def add_cover(web, album_id, folder, files):
     for path in files:
         audio = MP4(path)
         audio["covr"] = [MP4Cover(response.content, imageformat=MP4Cover.FORMAT_JPEG)]
+        audio.save()
+
+
+def thumbnail_cover(web, video_id, folder, files):
+    """The video's thumbnail, cut square from the middle, as the single's cover. Optional, like add_cover."""
+    from mutagen.mp4 import MP4, MP4Cover
+    for name in ("maxresdefault", "hqdefault"):
+        try:
+            response = web.get(f"https://i.ytimg.com/vi/{video_id}/{name}.jpg")
+        except Exception as error:
+            log.warning("Thumbnail fetch failed: %s", type(error).__name__)
+            return
+        if response.status_code == 200 and response.content.startswith(b"\xff\xd8"):
+            break
+    else:
+        return
+    raw, cover = folder / ".thumbnail.jpg", folder / "cover.jpg"
+    raw.write_bytes(response.content)
+    made = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(raw), "-vf", "crop='min(iw,ih)':'min(iw,ih)'",
+                           "-frames:v", "1", "-q:v", "2", str(cover)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    raw.unlink(missing_ok=True)
+    if made.returncode != 0 or not cover.exists():
+        cover.unlink(missing_ok=True)
+        return
+    for path in files:
+        audio = MP4(path)
+        audio["covr"] = [MP4Cover(cover.read_bytes(), imageformat=MP4Cover.FORMAT_JPEG)]
         audio.save()
 
 

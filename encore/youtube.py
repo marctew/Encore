@@ -79,7 +79,8 @@ def summary(entry):
     return {"id": video_id, "title": entry.get("title") or "Untitled", "seconds": int(entry.get("duration") or 0),
             "channel": entry.get("channel") or entry.get("uploader") or "",
             "thumb": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
-            "live": entry.get("live_status") in ("is_live", "is_upcoming")}
+            "live": entry.get("live_status") in ("is_live", "is_upcoming"),
+            "year": str(entry.get("release_year") or entry.get("upload_date") or "")[:4]}
 
 
 def reason(output):

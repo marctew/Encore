@@ -316,6 +316,30 @@ def audio_only(channel):
     return (channel or "").rstrip().endswith(" - Topic")
 
 
+YOUTUBE_NOISE = re.compile(r"\s*[(\[][^)\]]*\b(official|video|audio|lyrics?|visuali[sz]er|hd|hq|4k|mv|m/v|clip|remaster(ed)?)\b[^)\]]*[)\]]", re.I)
+YOUTUBE_TAIL = re.compile(r"\s*\b(official( music)? video|official audio|official visuali[sz]er|music video|lyrics?( video)?|visuali[sz]er|4k|hd|hq|mv)\s*$", re.I)
+YOUTUBE_SPLIT = re.compile(r"\s+[-–—|:]\s+|\s*\|\s*")
+
+
+def youtube_song(artist, video):
+    """The song a YouTube upload is of, from its title: "Artist - Song (Official Video)" gives "Song".
+    Topic channels title an upload with the song alone. "" when the title is only the artist."""
+    title = video.get("title") or ""
+    text = " ".join(YOUTUBE_NOISE.sub("", title).split())
+    if not audio_only(video.get("channel")):
+        parts = [p.strip(" \"'“”‘’") for p in YOUTUBE_SPLIT.split(text) if p.strip(" \"'“”‘’")]
+        others = [p for p in parts if (locate(words(p), artist) or (1,))[0] != 0]
+        text = others[0] if others else ""
+    quoted = re.findall(r'["“]([^"“”]{2,})["”]', text)
+    if quoted:
+        text = quoted[0]
+    previous = None
+    while text != previous:
+        previous, text = text, YOUTUBE_TAIL.sub("", text).strip(" -–—|:")
+    song = text.strip(" -–—|:\"'“”‘’")
+    return "" if not song or words(song) == words(artist) else song
+
+
 def score_youtube(track, artist, video):
     """Ranks a video for one track: the right length, the artist's own channel, the track's title,
     and none of the words that mean it's some other version."""
